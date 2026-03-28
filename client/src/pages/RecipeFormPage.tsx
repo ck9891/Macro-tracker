@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Ingredient, type Recipe } from "../api.js";
+import { useMacroSync } from "../hooks/useMacroSync.js";
 
 function emptyRecipe(): Omit<Recipe, "id"> {
   return {
@@ -24,27 +25,29 @@ export function RecipeFormPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(!isNew);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (isNew || !id) return;
-    let cancelled = false;
     api
       .getRecipe(id)
       .then((r) => {
-        if (cancelled) return;
         const { id: _i, ...rest } = r;
         setForm(rest);
         setLoading(false);
+        setError(null);
       })
       .catch((e: Error) => {
-        if (!cancelled) {
-          setError(e.message);
-          setLoading(false);
-        }
+        setError(e.message);
+        setLoading(false);
       });
-    return () => {
-      cancelled = true;
-    };
   }, [id, isNew]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useMacroSync(() => {
+    if (!isNew) load();
+  });
 
   function setIngredient(index: number, patch: Partial<Ingredient>) {
     setForm((f) => {

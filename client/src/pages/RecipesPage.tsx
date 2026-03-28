@@ -1,25 +1,25 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Recipe } from "../api.js";
+import { useMacroSync } from "../hooks/useMacroSync.js";
 
 export function RecipesPage() {
   const [recipes, setRecipes] = useState<Recipe[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
+    setError(null);
     api
       .listRecipes()
-      .then((r) => {
-        if (!cancelled) setRecipes(r);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((r) => setRecipes(r))
+      .catch((e: Error) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useMacroSync(load);
 
   if (error) {
     return (
@@ -28,7 +28,9 @@ export function RecipesPage() {
         <div className="error-banner" role="alert">
           {error}
         </div>
-        <p className="muted">Start the API server (port 3001) or open the Docker deployment.</p>
+        <p className="muted">
+          If you expected data here, connect once while online or start the API (port 3001 in dev).
+        </p>
       </>
     );
   }

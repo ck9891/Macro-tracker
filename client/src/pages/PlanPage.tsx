@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type PlannedMeal, type Recipe } from "../api.js";
+import { useMacroSync } from "../hooks/useMacroSync.js";
 
 export function PlanPage() {
   const [plan, setPlan] = useState<PlannedMeal[] | null>(null);
@@ -20,6 +21,8 @@ export function PlanPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useMacroSync(load);
 
   const recipeById = useMemo(() => {
     const m = new Map<string, Recipe>();

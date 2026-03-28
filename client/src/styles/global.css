@@ -62,6 +62,51 @@ a {
   flex-wrap: wrap;
 }
 
+.offline-status {
+  width: 100%;
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding: 0.5rem 0 0;
+  border-top: 1px solid var(--border);
+  margin-top: 0.35rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.offline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.offline-dot.online {
+  background: #34d399;
+  box-shadow: 0 0 10px #34d39955;
+}
+
+.offline-dot.offline {
+  background: #fbbf24;
+  box-shadow: 0 0 10px #fbbf2455;
+}
+
+.offline-label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.offline-detail {
+  flex: 1 1 auto;
+  min-width: 12ch;
+}
+
+.offline-synced {
+  font-size: 0.78rem;
+}
+
 .brand {
   display: inline-flex;
   align-items: center;

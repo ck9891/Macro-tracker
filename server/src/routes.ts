@@ -3,6 +3,7 @@ import type Database from "better-sqlite3";
 import { buildGroceryList, recipeMacrosForBatches } from "./grocery.js";
 import { rowToRecipe } from "./db.js";
 import type { PlannedMealInput, RecipeInput } from "./types.js";
+import { validatePlanPut, validateRecipeInput } from "./validate.js";
 
 function parseJsonBody<T>(req: Request, res: Response): T | null {
   if (!req.body || typeof req.body !== "object") {
@@ -15,6 +16,28 @@ function parseJsonBody<T>(req: Request, res: Response): T | null {
 export function registerRoutes(app: Express, db: Database.Database) {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.get("/api/sync", (_req, res) => {
+    const recipeRows = db.prepare("SELECT * FROM recipes ORDER BY name COLLATE NOCASE").all();
+    const planRows = db
+      .prepare(
+        `
+      SELECT pm.id, pm.recipe_id, pm.servings_multiplier
+      FROM planned_meals pm
+      ORDER BY pm.rowid
+    `,
+      )
+      .all() as { id: string; recipe_id: string; servings_multiplier: number }[];
+    res.json({
+      recipes: (recipeRows as Parameters<typeof rowToRecipe>[0][]).map(rowToRecipe),
+      plan: planRows.map((r) => ({
+        id: r.id,
+        recipeId: r.recipe_id,
+        servingsMultiplier: r.servings_multiplier,
+      })),
+      serverTime: new Date().toISOString(),
+    });
   });
 
   app.get("/api/recipes", (_req, res) => {
@@ -36,37 +59,7 @@ export function registerRoutes(app: Express, db: Database.Database) {
   app.post("/api/recipes", (req, res) => {
     const body = parseJsonBody<RecipeInput>(req, res);
     if (!body) return;
-    if (!body.name?.trim()) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
-    if (
-      typeof body.durationMinutes !== "number" ||
-      body.durationMinutes < 0 ||
-      !Number.isFinite(body.durationMinutes)
-    ) {
-      res.status(400).json({ error: "durationMinutes must be a non-negative number" });
-      return;
-    }
-    if (typeof body.servings !== "number" || body.servings <= 0 || !Number.isFinite(body.servings)) {
-      res.status(400).json({ error: "servings must be a positive number" });
-      return;
-    }
-    const macros = ["calories", "proteinG", "carbsG", "fatG"] as const;
-    for (const m of macros) {
-      if (typeof body[m] !== "number" || body[m] < 0 || !Number.isFinite(body[m])) {
-        res.status(400).json({ error: `${m} must be a non-negative number` });
-        return;
-      }
-    }
-    if (!Array.isArray(body.ingredients)) {
-      res.status(400).json({ error: "ingredients must be an array" });
-      return;
-    }
-    if (!Array.isArray(body.steps)) {
-      res.status(400).json({ error: "steps must be an array" });
-      return;
-    }
+    if (!validateRecipeInput(body, res)) return;
 
     const id = crypto.randomUUID();
     db.prepare(
@@ -93,26 +86,30 @@ export function registerRoutes(app: Express, db: Database.Database) {
     res.status(201).json(rowToRecipe(row));
   });
 
+  /** Idempotent upsert for offline sync (client supplies id). */
   app.put("/api/recipes/:id", (req, res) => {
     const body = parseJsonBody<RecipeInput>(req, res);
     if (!body) return;
-    const existing = db.prepare("SELECT id FROM recipes WHERE id = ?").get(req.params.id);
-    if (!existing) {
-      res.status(404).json({ error: "Recipe not found" });
-      return;
-    }
-    if (!body.name?.trim()) {
-      res.status(400).json({ error: "name is required" });
-      return;
-    }
+    if (!validateRecipeInput(body, res)) return;
+
+    const id = req.params.id;
     db.prepare(
       `
-      UPDATE recipes SET
-        name = ?, duration_minutes = ?, servings = ?, calories = ?, protein_g = ?, carbs_g = ?, fat_g = ?,
-        ingredients_json = ?, steps_json = ?
-      WHERE id = ?
+      INSERT INTO recipes (id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        duration_minutes = excluded.duration_minutes,
+        servings = excluded.servings,
+        calories = excluded.calories,
+        protein_g = excluded.protein_g,
+        carbs_g = excluded.carbs_g,
+        fat_g = excluded.fat_g,
+        ingredients_json = excluded.ingredients_json,
+        steps_json = excluded.steps_json
     `,
     ).run(
+      id,
       body.name.trim(),
       Math.round(body.durationMinutes),
       body.servings,
@@ -122,9 +119,8 @@ export function registerRoutes(app: Express, db: Database.Database) {
       body.fatG,
       JSON.stringify(body.ingredients),
       JSON.stringify(body.steps.map((s) => String(s))),
-      req.params.id,
     );
-    const row = db.prepare("SELECT * FROM recipes WHERE id = ?").get(req.params.id) as Parameters<
+    const row = db.prepare("SELECT * FROM recipes WHERE id = ?").get(id) as Parameters<
       typeof rowToRecipe
     >[0];
     res.json(rowToRecipe(row));
@@ -180,6 +176,33 @@ export function registerRoutes(app: Express, db: Database.Database) {
       "INSERT INTO planned_meals (id, recipe_id, servings_multiplier) VALUES (?, ?, ?)",
     ).run(id, body.recipeId, mult);
     res.status(201).json({ id, recipeId: body.recipeId, servingsMultiplier: mult });
+  });
+
+  /** Idempotent upsert for offline sync (client supplies planned meal id). */
+  app.put("/api/plan/:id", (req, res) => {
+    const body = parseJsonBody<PlannedMealInput>(req, res);
+    if (!body) return;
+    if (!validatePlanPut(body, res)) return;
+    const recipe = db.prepare("SELECT id FROM recipes WHERE id = ?").get(body.recipeId);
+    if (!recipe) {
+      res.status(404).json({ error: "Recipe not found" });
+      return;
+    }
+    const mult = body.servingsMultiplier ?? 1;
+    db.prepare(
+      `
+      INSERT INTO planned_meals (id, recipe_id, servings_multiplier)
+      VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        recipe_id = excluded.recipe_id,
+        servings_multiplier = excluded.servings_multiplier
+    `,
+    ).run(req.params.id, body.recipeId, mult);
+    res.json({
+      id: req.params.id,
+      recipeId: body.recipeId,
+      servingsMultiplier: mult,
+    });
   });
 
   app.patch("/api/plan/:id", (req, res) => {

@@ -1,103 +1,160 @@
-export type Ingredient = {
-  name: string;
-  amount?: number;
-  unit?: string;
-};
+import type { GroceryResponse, PlannedMeal, Recipe } from "./types.js";
+import { localStore, type OutboxEntry, type OutboxOp } from "./offline/localStore.js";
+import { syncEngine } from "./offline/syncEngine.js";
+import { rawApi } from "./offline/rawApi.js";
+import { computeGroceryFromLocal } from "./lib/grocery.js";
 
-export type Recipe = {
-  id: string;
-  name: string;
-  durationMinutes: number;
-  servings: number;
-  calories: number;
-  proteinG: number;
-  carbsG: number;
-  fatG: number;
-  ingredients: Ingredient[];
-  steps: string[];
-};
+export type { Ingredient, Recipe, PlannedMeal, GroceryLine, GroceryResponse } from "./types.js";
 
-export type PlannedMeal = {
-  id: string;
-  recipeId: string;
-  servingsMultiplier: number;
-};
+function emitSyncState() {
+  window.dispatchEvent(new CustomEvent("macro-sync"));
+}
 
-export type GroceryLine = {
-  key: string;
-  displayName: string;
-  totalAmount?: number;
-  unit?: string;
-  parts: { amount?: number; unit?: string; note?: string }[];
-  recipeRefs: { recipeName: string; contribution: string }[];
-};
+function newOutboxId() {
+  return crypto.randomUUID();
+}
 
-export type GroceryResponse = {
-  lines: GroceryLine[];
-  plannedCount: number;
-  macroTotals: { calories: number; proteinG: number; carbsG: number; fatG: number };
-};
+async function enqueue(op: OutboxOp): Promise<void> {
+  const entry: OutboxEntry = {
+    id: newOutboxId(),
+    createdAt: Date.now(),
+    op,
+  };
+  await localStore.enqueue(entry);
+}
 
-async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) {
-    const text = await res.text();
-    let msg = text;
-    try {
-      const j = JSON.parse(text) as { error?: string };
-      if (j.error) msg = j.error;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg || `Request failed (${res.status})`);
+async function registerBackgroundSync(): Promise<void> {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    await reg.sync?.register("macro-outbox-sync");
+  } catch {
+    /* unsupported or denied */
   }
-  if (res.status === 204) return undefined as T;
-  return res.json() as Promise<T>;
+}
+
+async function afterMutation(): Promise<void> {
+  emitSyncState();
+  if (syncEngine.isOnline()) {
+    try {
+      await syncEngine.syncAll();
+    } catch {
+      void registerBackgroundSync();
+    }
+    emitSyncState();
+  } else {
+    void registerBackgroundSync();
+  }
 }
 
 export const api = {
-  health: () => fetch("/api/health").then((r) => json<{ ok: boolean }>(r)),
+  health: () => rawApi.health(),
 
-  listRecipes: () => fetch("/api/recipes").then((r) => json<Recipe[]>(r)),
+  /** Full sync: pull server state, push outbox, pull again. */
+  sync: () => syncEngine.syncAll(),
 
-  getRecipe: (id: string) => fetch(`/api/recipes/${id}`).then((r) => json<Recipe>(r)),
+  listRecipes: async (): Promise<Recipe[]> => {
+    return localStore.getAllRecipes();
+  },
 
-  createRecipe: (body: Omit<Recipe, "id">) =>
-    fetch("/api/recipes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => json<Recipe>(r)),
+  getRecipe: async (id: string): Promise<Recipe> => {
+    const r = await localStore.getRecipe(id);
+    if (!r) throw new Error("Recipe not found");
+    return r;
+  },
 
-  updateRecipe: (id: string, body: Omit<Recipe, "id">) =>
-    fetch(`/api/recipes/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }).then((r) => json<Recipe>(r)),
+  createRecipe: async (body: Omit<Recipe, "id">): Promise<Recipe> => {
+    const id = crypto.randomUUID();
+    const recipe: Recipe = { id, ...body };
+    await localStore.putRecipe(recipe);
+    await enqueue({ kind: "recipe.put", id, body });
+    await afterMutation();
+    return recipe;
+  },
 
-  deleteRecipe: (id: string) =>
-    fetch(`/api/recipes/${id}`, { method: "DELETE" }).then((r) => json<void>(r)),
+  updateRecipe: async (id: string, body: Omit<Recipe, "id">): Promise<Recipe> => {
+    const recipe: Recipe = { id, ...body };
+    await localStore.putRecipe(recipe);
+    await enqueue({ kind: "recipe.put", id, body });
+    await afterMutation();
+    return recipe;
+  },
 
-  getPlan: () => fetch("/api/plan").then((r) => json<PlannedMeal[]>(r)),
+  deleteRecipe: async (id: string): Promise<void> => {
+    const plan = await localStore.getAllPlan();
+    for (const row of plan) {
+      if (row.recipeId === id) {
+        await localStore.deletePlanMeal(row.id);
+        await enqueue({ kind: "plan.delete", id: row.id });
+      }
+    }
+    await localStore.deleteRecipe(id);
+    await enqueue({ kind: "recipe.delete", id });
+    await afterMutation();
+  },
 
-  addToPlan: (recipeId: string, servingsMultiplier?: number) =>
-    fetch("/api/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recipeId, servingsMultiplier }),
-    }).then((r) => json<PlannedMeal>(r)),
+  getPlan: async (): Promise<PlannedMeal[]> => {
+    return localStore.getAllPlan();
+  },
 
-  updatePlanItem: (id: string, servingsMultiplier: number) =>
-    fetch(`/api/plan/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ servingsMultiplier }),
-    }).then((r) => json<PlannedMeal>(r)),
+  addToPlan: async (recipeId: string, servingsMultiplier?: number): Promise<PlannedMeal> => {
+    const id = crypto.randomUUID();
+    const mult = servingsMultiplier ?? 1;
+    const meal: PlannedMeal = { id, recipeId, servingsMultiplier: mult };
+    await localStore.putPlanMeal(meal);
+    await enqueue({ kind: "plan.put", id, recipeId, servingsMultiplier: mult });
+    await afterMutation();
+    return meal;
+  },
 
-  removeFromPlan: (id: string) =>
-    fetch(`/api/plan/${id}`, { method: "DELETE" }).then((r) => json<void>(r)),
+  updatePlanItem: async (id: string, servingsMultiplier: number): Promise<PlannedMeal> => {
+    const plan = await localStore.getAllPlan();
+    const row = plan.find((p) => p.id === id);
+    if (!row) throw new Error("Planned meal not found");
+    const updated: PlannedMeal = { ...row, servingsMultiplier };
+    await localStore.putPlanMeal(updated);
+    await enqueue({
+      kind: "plan.patch",
+      id,
+      recipeId: row.recipeId,
+      servingsMultiplier,
+    });
+    await afterMutation();
+    return updated;
+  },
 
-  clearPlan: () => fetch("/api/plan", { method: "DELETE" }).then((r) => json<void>(r)),
+  removeFromPlan: async (id: string): Promise<void> => {
+    await localStore.deletePlanMeal(id);
+    await enqueue({ kind: "plan.delete", id });
+    await afterMutation();
+  },
 
-  getGrocery: () => fetch("/api/grocery").then((r) => json<GroceryResponse>(r)),
+  clearPlan: async (): Promise<void> => {
+    await localStore.clearPlan();
+    await enqueue({ kind: "plan.clear" });
+    await afterMutation();
+  },
+
+  getGrocery: async (): Promise<GroceryResponse> => {
+    const [recipes, plan] = await Promise.all([localStore.getAllRecipes(), localStore.getAllPlan()]);
+    return computeGroceryFromLocal(
+      recipes,
+      plan.map((p) => ({ recipeId: p.recipeId, servingsMultiplier: p.servingsMultiplier })),
+    );
+  },
+
+  /** Bootstrap local DB from server when app loads (optional). */
+  bootstrapFromNetwork: async (): Promise<void> => {
+    if (!syncEngine.isOnline()) return;
+    await syncEngine.syncAll();
+    emitSyncState();
+  },
+
+  pendingCount: async (): Promise<number> => {
+    const q = await localStore.listOutbox();
+    return q.length;
+  },
+
+  lastSyncedAt: () => syncEngine.getLastSyncedAt(),
+
+  isOnline: () => syncEngine.isOnline(),
 };

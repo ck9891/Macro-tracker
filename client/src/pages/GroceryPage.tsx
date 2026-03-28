@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type GroceryResponse } from "../api.js";
+import { useMacroSync } from "../hooks/useMacroSync.js";
 
 function formatAmount(n: number) {
   return n % 1 === 0 ? String(n) : n.toFixed(2);
@@ -10,20 +11,19 @@ export function GroceryPage() {
   const [data, setData] = useState<GroceryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback(() => {
+    setError(null);
     api
       .getGrocery()
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((d) => setData(d))
+      .catch((e: Error) => setError(e.message));
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useMacroSync(load);
 
   if (error && !data) {
     return (

@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Recipe } from "../api.js";
+import { useMacroSync } from "../hooks/useMacroSync.js";
 
 export function RecipeDetailPage() {
   const { id } = useParams();
@@ -9,21 +10,20 @@ export function RecipeDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     if (!id) return;
-    let cancelled = false;
+    setError(null);
     api
       .getRecipe(id)
-      .then((r) => {
-        if (!cancelled) setRecipe(r);
-      })
-      .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
-      });
-    return () => {
-      cancelled = true;
-    };
+      .then((r) => setRecipe(r))
+      .catch((e: Error) => setError(e.message));
   }, [id]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  useMacroSync(load);
 
   async function addToPlan() {
     if (!recipe) return;

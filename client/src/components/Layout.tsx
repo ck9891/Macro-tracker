@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { OfflineStatus } from "./OfflineStatus.js";
 
 type Props = {
   children: ReactNode;
@@ -18,6 +19,7 @@ export function Layout({ children, nav }: Props) {
           <nav className="main-nav" aria-label="Primary">
             {nav}
           </nav>
+          <OfflineStatus />
         </div>
       </header>
       <main className="app-main">{children}</main>
