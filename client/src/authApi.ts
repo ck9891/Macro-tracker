@@ -20,6 +20,7 @@ export type AuthUser = {
   id: string;
   email: string;
   totpEnabled: boolean;
+  isAdmin: boolean;
 };
 
 export const authApi = {

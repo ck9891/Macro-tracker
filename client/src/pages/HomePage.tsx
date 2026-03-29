@@ -1,8 +1,28 @@
 import { Link } from "react-router-dom";
+import { useAuth } from "../authContext.js";
+
+function displayNameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? email;
+  return local.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export function HomePage() {
+  const { state } = useAuth();
+  const user = state.status === "signedIn" ? state.user : null;
+  const greetingName = user ? displayNameFromEmail(user.email) : null;
+
   return (
     <>
+      {user && greetingName ? (
+        <p className="home-greeting" style={{ marginBottom: "0.75rem", fontSize: "1.125rem" }}>
+          Hello {greetingName}
+          {user.isAdmin ? (
+            <span className="pill" style={{ marginLeft: "0.5rem", verticalAlign: "middle" }}>
+              Admin
+            </span>
+          ) : null}
+        </p>
+      ) : null}
       <h1 className="page-title">Plan meals, merge groceries, stay on macros</h1>
       <p className="page-lede">
         Add recipes with prep or cook time and per-recipe macros. Build a meal plan with optional batch

@@ -19,13 +19,14 @@ export type AuthUser = {
   id: string;
   email: string;
   totpEnabled: boolean;
+  isAdmin: boolean;
 };
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-function hashPassword(password: string): string {
+export function hashPassword(password: string): string {
   const salt = randomBytes(16);
   const key = scryptSync(password, salt, 64);
   return `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
@@ -81,7 +82,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
       res.status(400).json({ error: "password must be at least 8 characters" });
       return;
     }
-    if (email === "legacy@local") {
+    if (email === "legacy@local" || email === (process.env.TEST_ADMIN_EMAIL ?? "test.admin@local").toLowerCase()) {
       res.status(400).json({ error: "reserved email" });
       return;
     }
@@ -89,7 +90,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     const passwordHash = hashPassword(body.password);
     try {
       db.prepare(
-        "INSERT INTO users (id, email, password_hash, totp_enabled) VALUES (?, ?, ?, 0)",
+        "INSERT INTO users (id, email, password_hash, totp_enabled, is_admin) VALUES (?, ?, ?, 0, 0)",
       ).run(id, email, passwordHash);
     } catch {
       res.status(409).json({ error: "An account with this email already exists" });
@@ -109,7 +110,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
       maxAge: SESSION_DAYS_PASSWORD * 24 * 60 * 60 * 1000,
       path: "/",
     });
-    res.status(201).json({ user: { id, email, totpEnabled: false } });
+    res.status(201).json({ user: { id, email, totpEnabled: false, isAdmin: false } });
   });
 
   app.post("/api/auth/login", (req, res) => {
@@ -121,7 +122,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     const email = body.email.trim().toLowerCase();
     const row = db
       .prepare(
-        "SELECT id, email, password_hash, totp_secret, totp_enabled FROM users WHERE email = ? COLLATE NOCASE",
+        "SELECT id, email, password_hash, totp_secret, totp_enabled, is_admin FROM users WHERE email = ? COLLATE NOCASE",
       )
       .get(email) as
       | {
@@ -130,6 +131,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
           password_hash: string | null;
           totp_secret: string | null;
           totp_enabled: number;
+          is_admin: number;
         }
       | undefined;
     if (!row || !row.password_hash || !verifyPassword(body.password, row.password_hash)) {
@@ -158,7 +160,12 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
       path: "/",
     });
     res.json({
-      user: { id: row.id, email: row.email, totpEnabled: Boolean(row.totp_enabled) },
+      user: {
+        id: row.id,
+        email: row.email,
+        totpEnabled: Boolean(row.totp_enabled),
+        isAdmin: Boolean(row.is_admin),
+      },
     });
   });
 
@@ -224,7 +231,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     const row = db
       .prepare(
         `
-      SELECT m.id, m.user_id, m.expires_at, m.used_at, u.email, u.totp_enabled
+      SELECT m.id, m.user_id, m.expires_at, m.used_at, u.email, u.totp_enabled, u.is_admin
       FROM magic_login_tokens m
       JOIN users u ON u.id = m.user_id
       WHERE m.token_hash = ?
@@ -238,6 +245,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
           used_at: string | null;
           email: string;
           totp_enabled: number;
+          is_admin: number;
         }
       | undefined;
     if (!row || row.used_at) {
@@ -268,6 +276,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
         id: row.user_id,
         email: row.email,
         totpEnabled: Boolean(row.totp_enabled),
+        isAdmin: Boolean(row.is_admin),
       },
     });
   });
@@ -356,21 +365,26 @@ export function getSessionUser(db: Database.Database, req: Request): AuthUser | 
   const row = db
     .prepare(
       `
-    SELECT s.expires_at, u.id, u.email, u.totp_enabled
+    SELECT s.expires_at, u.id, u.email, u.totp_enabled, u.is_admin
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.id = ? AND s.token_hash = ?
   `,
     )
     .get(sessionId, tokenHash) as
-    | { expires_at: string; id: string; email: string; totp_enabled: number }
+    | { expires_at: string; id: string; email: string; totp_enabled: number; is_admin: number }
     | undefined;
   if (!row) return null;
   if (new Date(row.expires_at) <= new Date()) {
     db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
     return null;
   }
-  return { id: row.id, email: row.email, totpEnabled: Boolean(row.totp_enabled) };
+  return {
+    id: row.id,
+    email: row.email,
+    totpEnabled: Boolean(row.totp_enabled),
+    isAdmin: Boolean(row.is_admin),
+  };
 }
 
 export function requireUser(

@@ -72,7 +72,14 @@ export function AccountPage() {
   return (
     <div>
       <h1 className="page-title">Account</h1>
-      <p className="page-lede">Signed in as {user.email}</p>
+      <p className="page-lede">
+        Signed in as {user.email}
+        {user.isAdmin ? (
+          <span className="pill" style={{ marginLeft: "0.5rem" }}>
+            Admin
+          </span>
+        ) : null}
+      </p>
       {message ? <p className="subtle">{message}</p> : null}
       {error ? <div className="error-banner">{error}</div> : null}
 
