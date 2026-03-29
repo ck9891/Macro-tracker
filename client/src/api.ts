@@ -1,10 +1,18 @@
-import type { GroceryResponse, PlannedMeal, Recipe } from "./types.js";
+import type { GroceryResponse, PlannedMeal, Recipe, WeightEntry } from "./types.js";
 import { localStore, type OutboxEntry, type OutboxOp } from "./offline/localStore.js";
 import { syncEngine } from "./offline/syncEngine.js";
 import { rawApi } from "./offline/rawApi.js";
 import { computeGroceryFromLocal } from "./lib/grocery.js";
 
-export type { Ingredient, Recipe, PlannedMeal, GroceryLine, GroceryResponse } from "./types.js";
+export type {
+  Ingredient,
+  Recipe,
+  PlannedMeal,
+  GroceryLine,
+  GroceryResponse,
+  WeightEntry,
+  WeightUnit,
+} from "./types.js";
 
 function emitSyncState() {
   window.dispatchEvent(new CustomEvent("macro-sync"));
@@ -157,4 +165,23 @@ export const api = {
   lastSyncedAt: () => syncEngine.getLastSyncedAt(),
 
   isOnline: () => syncEngine.isOnline(),
+
+  listWeightEntries: async (): Promise<WeightEntry[]> => {
+    return localStore.getAllWeight();
+  },
+
+  addWeightEntry: async (body: Omit<WeightEntry, "id">): Promise<WeightEntry> => {
+    const id = crypto.randomUUID();
+    const entry: WeightEntry = { id, ...body };
+    await localStore.putWeight(entry);
+    await enqueue({ kind: "weight.put", id, body });
+    await afterMutation();
+    return entry;
+  },
+
+  deleteWeightEntry: async (id: string): Promise<void> => {
+    await localStore.deleteWeight(id);
+    await enqueue({ kind: "weight.delete", id });
+    await afterMutation();
+  },
 };
