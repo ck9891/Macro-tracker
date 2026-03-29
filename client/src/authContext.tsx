@@ -8,8 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { authApi, type AuthUser } from "./authApi.js";
-import { clearAuthLocalState, syncLocalUserId } from "./authSession.js";
-import { api } from "./api.js";
 
 type AuthState =
   | { status: "loading"; user: null }
@@ -30,11 +28,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const { user } = await authApi.me();
-      await syncLocalUserId(user.id);
       setState({ status: "signedIn", user });
-      void api.bootstrapFromNetwork();
     } catch {
-      await clearAuthLocalState();
       setState({ status: "signedOut", user: null });
     }
   }, []);
@@ -49,7 +44,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* still clear client */
     }
-    await clearAuthLocalState();
     setState({ status: "signedOut", user: null });
   }, []);
 
