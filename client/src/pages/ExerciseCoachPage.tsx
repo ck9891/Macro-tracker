@@ -19,9 +19,11 @@ import {
   measureExercise,
   mirrorLandmarks,
   primaryMetricLabel,
+  squatThighVerticality,
   torsoFoldModelFromCalibration,
   updateRepState,
 } from "../lib/exercisePoseAnalysis.js";
+import { playRepCompleteDing } from "../lib/repCompleteSound.js";
 
 const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/wasm";
 const MODEL_URL =
@@ -251,7 +253,15 @@ export function ExerciseCoachPage() {
       lastSecondaryRef.current = secondary;
 
       const model = customRepModelsRef.current[kind] ?? DEFAULT_REP_MODEL[kind];
-      repRef.current = updateRepState(primary, repRef.current, model);
+      const prevReps = repRef.current.reps;
+      const squatGate =
+        kind === "squat" || kind === "barbell_squat"
+          ? { squatThighVerticality: squatThighVerticality(raw) }
+          : null;
+      repRef.current = updateRepState(primary, repRef.current, model, squatGate);
+      if (repRef.current.reps > prevReps) {
+        playRepCompleteDing();
+      }
       setReps(repRef.current.reps);
       setPhase(repRef.current.phase);
       setAngleText(Number.isFinite(primary) ? `${Math.round(primary)}°` : "—");

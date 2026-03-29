@@ -74,14 +74,80 @@ function armScore(
   return shoulder.visibility + elbow.visibility + wrist.visibility;
 }
 
+const LIMB_VIS_FLOOR = 0.22;
+
+function legKneeAngle(landmarks: NormalizedLandmark[], side: "left" | "right"): number {
+  const L = landmarks;
+  if (side === "left") {
+    return angleAt(L[LM.leftHip], L[LM.leftKnee], L[LM.leftAnkle]);
+  }
+  return angleAt(L[LM.rightHip], L[LM.rightKnee], L[LM.rightAnkle]);
+}
+
+function legVisibleEnough(landmarks: NormalizedLandmark[], side: "left" | "right"): boolean {
+  const L = landmarks;
+  if (side === "left") {
+    return (
+      L[LM.leftHip].visibility >= LIMB_VIS_FLOOR &&
+      L[LM.leftKnee].visibility >= LIMB_VIS_FLOOR &&
+      L[LM.leftAnkle].visibility >= LIMB_VIS_FLOOR
+    );
+  }
+  return (
+    L[LM.rightHip].visibility >= LIMB_VIS_FLOOR &&
+    L[LM.rightKnee].visibility >= LIMB_VIS_FLOOR &&
+    L[LM.rightAnkle].visibility >= LIMB_VIS_FLOOR
+  );
+}
+
+/**
+ * Knee flexion angle for squats. When both legs are tracked, uses the **more flexed** knee so a rep only
+ * finishes when both legs reach lockout — avoids false reps from tracker hopping between legs or one leg
+ * flickering while the other stays bent.
+ */
 export function pickSquatAngle(landmarks: NormalizedLandmark[]): number {
   const L = landmarks;
+  const leftOk = legVisibleEnough(L, "left");
+  const rightOk = legVisibleEnough(L, "right");
+  const leftAng = legKneeAngle(L, "left");
+  const rightAng = legKneeAngle(L, "right");
+  const leftFin = leftOk && Number.isFinite(leftAng);
+  const rightFin = rightOk && Number.isFinite(rightAng);
+
+  if (leftFin && rightFin) {
+    return Math.min(leftAng, rightAng);
+  }
+  if (leftFin) return leftAng;
+  if (rightFin) return rightAng;
+
   const left = limbScore(L[LM.leftHip], L[LM.leftKnee], L[LM.leftAnkle]);
   const right = limbScore(L[LM.rightHip], L[LM.rightKnee], L[LM.rightAnkle]);
   if (left >= right) {
     return angleAt(L[LM.leftHip], L[LM.leftKnee], L[LM.leftAnkle]);
   }
   return angleAt(L[LM.rightHip], L[LM.rightKnee], L[LM.rightAnkle]);
+}
+
+/**
+ * High when thighs point down (standing lockout); drops when hips sit low vs knees (deep squat).
+ * Used to avoid counting a “rep” if knee angles look extended but hips never rose back up.
+ */
+export function squatThighVerticality(landmarks: NormalizedLandmark[]): number | null {
+  const L = landmarks;
+
+  function one(hip: NormalizedLandmark, knee: NormalizedLandmark): number | null {
+    if (hip.visibility < LIMB_VIS_FLOOR || knee.visibility < LIMB_VIS_FLOOR) return null;
+    const dx = knee.x - hip.x;
+    const dy = knee.y - hip.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.02) return null;
+    return dy / len;
+  }
+
+  const l = one(L[LM.leftHip], L[LM.leftKnee]);
+  const r = one(L[LM.rightHip], L[LM.rightKnee]);
+  if (l != null && r != null) return (l + r) / 2;
+  return l ?? r ?? null;
 }
 
 export function pickPushupAngle(landmarks: NormalizedLandmark[]): number {
@@ -169,7 +235,20 @@ export type RepState = {
   lastPrimary: number | null;
 };
 
-export function updateRepState(primaryDeg: number, prev: RepState, model: RepModel): RepState {
+/** Min thigh verticality (hip→knee vs vertical in image) to accept squat lockout as a finished rep. */
+const SQUAT_LOCKOUT_THIGH_MIN = 0.62;
+
+export type SquatRepGate = {
+  /** When set (squat / barbell squat), rep increment at lockout also requires this ≥ {@link SQUAT_LOCKOUT_THIGH_MIN}. */
+  squatThighVerticality: number | null;
+};
+
+export function updateRepState(
+  primaryDeg: number,
+  prev: RepState,
+  model: RepModel,
+  squatGate?: SquatRepGate | null,
+): RepState {
   const next = { ...prev, lastPrimary: primaryDeg };
 
   if (!Number.isFinite(primaryDeg)) {
@@ -178,6 +257,10 @@ export function updateRepState(primaryDeg: number, prev: RepState, model: RepMod
 
   if (model.kind === "flexion") {
     const { extended, bottomEnter, bottomExit } = model;
+    const squatV = squatGate?.squatThighVerticality ?? null;
+    const squatLockoutOk =
+      squatV == null || !Number.isFinite(squatV) ? true : squatV >= SQUAT_LOCKOUT_THIGH_MIN;
+
     switch (prev.phase) {
       case "idle":
         if (primaryDeg < extended - 5) next.phase = "eccentric";
@@ -189,9 +272,11 @@ export function updateRepState(primaryDeg: number, prev: RepState, model: RepMod
         if (primaryDeg >= bottomExit) next.phase = "concentric";
         break;
       case "concentric":
-        if (primaryDeg >= extended) {
+        if (primaryDeg >= extended && squatLockoutOk) {
           next.reps += 1;
           next.phase = "idle";
+        } else if (primaryDeg >= extended && !squatLockoutOk) {
+          /* stay in concentric until hips/thighs read as real lockout */
         } else if (primaryDeg <= bottomEnter) {
           next.phase = "bottom";
         }
