@@ -12,8 +12,13 @@
 /.next/
 /out/
 
+# app data
+server/data/
+
 # production
 /build
+client/dist
+server/dist
 
 # misc
 .DS_Store
