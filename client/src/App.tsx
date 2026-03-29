@@ -7,6 +7,7 @@ import { PlanPage } from "./pages/PlanPage.js";
 import { GroceryPage } from "./pages/GroceryPage.js";
 import { ImportRecipePage } from "./pages/ImportRecipePage.js";
 import { RecipeFormPage } from "./pages/RecipeFormPage.js";
+import { ProgressPage } from "./pages/ProgressPage.js";
 
 export default function App() {
   return (
@@ -25,6 +26,9 @@ export default function App() {
           <NavLink to="/grocery" className="nav-link">
             Grocery list
           </NavLink>
+          <NavLink to="/progress" className="nav-link">
+            Progress
+          </NavLink>
           <NavLink to="/import" className="nav-link nav-link-accent">
             Import from photo
           </NavLink>
@@ -39,6 +43,7 @@ export default function App() {
         <Route path="/recipes/:id" element={<RecipeDetailPage />} />
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/grocery" element={<GroceryPage />} />
+        <Route path="/progress" element={<ProgressPage />} />
         <Route path="/import" element={<ImportRecipePage />} />
       </Routes>
     </Layout>

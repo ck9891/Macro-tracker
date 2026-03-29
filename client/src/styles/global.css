@@ -391,3 +391,72 @@ a {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+.chart-wrap {
+  width: 100%;
+}
+
+.spark-chart {
+  display: block;
+  max-width: 100%;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.chart-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.chart-axis {
+  display: flex;
+  justify-content: space-between;
+}
+
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.2rem;
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+}
+
+.segmented button {
+  appearance: none;
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.65rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.segmented button:hover {
+  color: var(--text);
+  background: var(--surface);
+}
+
+.segmented button.active {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}

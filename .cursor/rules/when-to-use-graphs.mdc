@@ -1,0 +1,24 @@
+---
+description: Decide whether a feature should include charts or graphs
+globs: "**/*.{tsx,ts,jsx,js}"
+alwaysApply: false
+---
+
+# When graphs make sense
+
+Use a **graph or chart** when the feature helps users **see change over time**, **compare magnitudes across categories**, or **spot patterns** that are hard to grasp from numbers alone.
+
+**Prefer graphs when:**
+
+- Data is naturally **ordered** (time series: weight, daily macros, weekly totals).
+- Users need **trends, volatility, or progress** (not just the latest value).
+- There are **several related series** on the same scale or easy dual axes (e.g. macros in grams together).
+
+**Skip graphs or use simpler UI when:**
+
+- The answer is a **single current value** or **one-off action** (toggle, form, detail view).
+- The dataset is **tiny and static** (e.g. one row) — a table or summary line is enough.
+- Values are **mostly categorical labels** without meaningful order — consider a list, tags, or search.
+- Precision matters more than shape (exact IDs, long text) — tables beat charts.
+
+**Heuristic:** If the user’s question sounds like “how has this **changed**?” or “how do these **compare**?”, a graph is often appropriate. If it sounds like “what is **this** right now?” or “how do I **do** X?”, default to non-chart UI unless there is a clear time or comparison dimension.

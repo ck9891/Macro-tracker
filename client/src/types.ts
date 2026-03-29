@@ -37,3 +37,15 @@ export type GroceryResponse = {
   plannedCount: number;
   macroTotals: { calories: number; proteinG: number; carbsG: number; fatG: number };
 };
+
+/** YYYY-MM-DD; values are what you actually ate / weighed that calendar day. */
+export type ProgressDay = {
+  day: string;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  weightKg: number | null;
+};
+
+export type ProgressDayInput = Omit<ProgressDay, "day">;

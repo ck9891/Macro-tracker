@@ -1,7 +1,7 @@
-import type { PlannedMeal, Recipe } from "../types.js";
+import type { PlannedMeal, ProgressDay, Recipe } from "../types.js";
 
 const DB_NAME = "macro-tracker-v1";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export type OutboxOp =
   | { kind: "recipe.put"; id: string; body: Omit<Recipe, "id"> }
@@ -9,7 +9,9 @@ export type OutboxOp =
   | { kind: "plan.put"; id: string; recipeId: string; servingsMultiplier: number }
   | { kind: "plan.patch"; id: string; recipeId: string; servingsMultiplier: number }
   | { kind: "plan.delete"; id: string }
-  | { kind: "plan.clear" };
+  | { kind: "plan.clear" }
+  | { kind: "progress.put"; day: string; body: Omit<ProgressDay, "day"> }
+  | { kind: "progress.delete"; day: string };
 
 export type OutboxEntry = {
   id: string;
@@ -38,6 +40,9 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains("outbox")) {
           db.createObjectStore("outbox", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("progress")) {
+          db.createObjectStore("progress", { keyPath: "day" });
         }
       };
     });
@@ -142,6 +147,44 @@ export const localStore = {
       const st = t.objectStore("plan");
       st.clear();
       for (const p of plan) st.put(p);
+    });
+  },
+
+  async getAllProgress(): Promise<ProgressDay[]> {
+    const db = await openDb();
+    const t = db.transaction(["progress"], "readonly");
+    return reqDone(t.objectStore("progress").getAll() as IDBRequest<ProgressDay[]>);
+  },
+
+  async putProgress(row: ProgressDay): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["progress"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("progress").put(row);
+    });
+  },
+
+  async deleteProgress(day: string): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["progress"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("progress").delete(day);
+    });
+  },
+
+  async replaceProgress(rows: ProgressDay[]): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["progress"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      const st = t.objectStore("progress");
+      st.clear();
+      for (const r of rows) st.put(r);
     });
   },
 
