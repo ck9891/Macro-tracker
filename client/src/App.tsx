@@ -9,6 +9,7 @@ import { PlanPage } from "./pages/PlanPage.js";
 import { GroceryPage } from "./pages/GroceryPage.js";
 import { ImportRecipePage } from "./pages/ImportRecipePage.js";
 import { RecipeFormPage } from "./pages/RecipeFormPage.js";
+import { ProgressPage } from "./pages/ProgressPage.js";
 import { LinkLoginPage } from "./pages/LinkLoginPage.js";
 import { LoginPage } from "./pages/LoginPage.js";
 import { WeightPage } from "./pages/WeightPage.js";
@@ -50,6 +51,9 @@ export default function App() {
           <NavLink to="/grocery" className="nav-link">
             Grocery list
           </NavLink>
+          <NavLink to="/progress" className="nav-link">
+            Progress
+          </NavLink>
           <NavLink to="/weight" className="nav-link">
             Weight
           </NavLink>
@@ -70,6 +74,7 @@ export default function App() {
         <Route path="/recipes/:id" element={<RecipeDetailPage />} />
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/grocery" element={<GroceryPage />} />
+        <Route path="/progress" element={<ProgressPage />} />
         <Route path="/weight" element={<WeightPage />} />
         <Route path="/import" element={<ImportRecipePage />} />
         <Route path="/account" element={<AccountPage />} />

@@ -1,5 +1,7 @@
 import type { Response } from "express";
-import type { PlannedMealInput, RecipeInput, WeightEntryInput } from "./types.js";
+import type { PlannedMealInput, ProgressDayInput, RecipeInput, WeightEntryInput } from "./types.js";
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function validateRecipeInput(body: RecipeInput, res: Response): body is RecipeInput {
   if (!body.name?.trim()) {
@@ -48,6 +50,33 @@ export function validatePlanPut(
   if (typeof mult !== "number" || mult <= 0 || !Number.isFinite(mult)) {
     res.status(400).json({ error: "servingsMultiplier must be a positive number" });
     return false;
+  }
+  return true;
+}
+
+export function isValidDayParam(day: string): boolean {
+  if (typeof day !== "string" || !DAY_RE.test(day)) return false;
+  const [y, m, d] = day.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+export function validateProgressInput(
+  body: ProgressDayInput,
+  res: Response,
+): body is ProgressDayInput {
+  const macros = ["calories", "proteinG", "carbsG", "fatG"] as const;
+  for (const m of macros) {
+    if (typeof body[m] !== "number" || body[m] < 0 || !Number.isFinite(body[m])) {
+      res.status(400).json({ error: `${m} must be a non-negative number` });
+      return false;
+    }
+  }
+  if (body.weightKg != null) {
+    if (typeof body.weightKg !== "number" || body.weightKg <= 0 || !Number.isFinite(body.weightKg)) {
+      res.status(400).json({ error: "weightKg must be a positive number when set" });
+      return false;
+    }
   }
   return true;
 }

@@ -26,6 +26,18 @@ export type PlannedMealInput = {
 
 export type PlannedMeal = PlannedMealInput & { id: string };
 
+/** Calendar day in YYYY-MM-DD (client-local interpretation). */
+export type ProgressDayInput = {
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  /** Omit or null when not weighed that day. */
+  weightKg?: number | null;
+};
+
+export type ProgressDay = ProgressDayInput & { day: string };
+
 export type WeightUnit = "kg" | "lb";
 
 export type WeightEntryInput = {

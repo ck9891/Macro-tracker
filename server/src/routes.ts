@@ -2,9 +2,15 @@ import type { Express, Request, Response } from "express";
 import type Database from "better-sqlite3";
 import { requireUser, type AuthUser } from "./auth.js";
 import { buildGroceryList, recipeMacrosForBatches } from "./grocery.js";
-import { rowToRecipe, rowToWeightEntry } from "./db.js";
-import type { PlannedMealInput, RecipeInput, WeightEntryInput } from "./types.js";
-import { validatePlanPut, validateRecipeInput, validateWeightEntryInput } from "./validate.js";
+import { rowToProgressDay, rowToRecipe, rowToWeightEntry } from "./db.js";
+import type { PlannedMealInput, ProgressDayInput, RecipeInput, WeightEntryInput } from "./types.js";
+import {
+  isValidDayParam,
+  validatePlanPut,
+  validateProgressInput,
+  validateRecipeInput,
+  validateWeightEntryInput,
+} from "./validate.js";
 
 type AuthedRequest = Request & { authUser: AuthUser };
 
@@ -47,6 +53,11 @@ export function registerRoutes(app: Express, db: Database.Database) {
         "SELECT id, measured_at, weight, unit, note FROM weight_entries WHERE user_id = ? ORDER BY measured_at DESC",
       )
       .all(uid) as Parameters<typeof rowToWeightEntry>[0][];
+    const progressRows = db
+      .prepare(
+        "SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress WHERE user_id = ? ORDER BY day",
+      )
+      .all(uid) as Parameters<typeof rowToProgressDay>[0][];
 
     res.json({
       recipes: (recipeRows as Parameters<typeof rowToRecipe>[0][]).map(rowToRecipe),
@@ -56,6 +67,7 @@ export function registerRoutes(app: Express, db: Database.Database) {
         servingsMultiplier: r.servings_multiplier,
       })),
       weightEntries: weightRows.map(rowToWeightEntry),
+      progress: progressRows.map(rowToProgressDay),
       serverTime: new Date().toISOString(),
     });
   });
@@ -346,6 +358,68 @@ export function registerRoutes(app: Express, db: Database.Database) {
       plannedCount: selections.length,
       macroTotals: totals,
     });
+  });
+
+  app.get("/api/progress", needUser, (req, res) => {
+    const uid = userId(req);
+    const rows = db
+      .prepare(
+        "SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress WHERE user_id = ? ORDER BY day",
+      )
+      .all(uid) as Parameters<typeof rowToProgressDay>[0][];
+    res.json(rows.map(rowToProgressDay));
+  });
+
+  app.put("/api/progress/:day", needUser, (req, res) => {
+    const dayParam = req.params.day;
+    const day = Array.isArray(dayParam) ? dayParam[0] : dayParam;
+    if (!isValidDayParam(day)) {
+      res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      return;
+    }
+    const body = parseJsonBody<ProgressDayInput>(req, res);
+    if (!body) return;
+    if (!validateProgressInput(body, res)) return;
+
+    const uid = userId(req);
+    const weightKg = body.weightKg == null ? null : body.weightKg;
+    db.prepare(
+      `
+      INSERT INTO daily_progress (user_id, day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(user_id, day) DO UPDATE SET
+        calories = excluded.calories,
+        protein_g = excluded.protein_g,
+        carbs_g = excluded.carbs_g,
+        fat_g = excluded.fat_g,
+        weight_kg = excluded.weight_kg,
+        updated_at = excluded.updated_at
+    `,
+    ).run(uid, day, body.calories, body.proteinG, body.carbsG, body.fatG, weightKg);
+
+    const row = db
+      .prepare(
+        "SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress WHERE user_id = ? AND day = ?",
+      )
+      .get(uid, day) as Parameters<typeof rowToProgressDay>[0];
+    res.json(rowToProgressDay(row));
+  });
+
+  app.delete("/api/progress/:day", needUser, (req, res) => {
+    const dayParam = req.params.day;
+    const day = Array.isArray(dayParam) ? dayParam[0] : dayParam;
+    if (!isValidDayParam(day)) {
+      res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      return;
+    }
+    const r = db
+      .prepare("DELETE FROM daily_progress WHERE user_id = ? AND day = ?")
+      .run(userId(req), day);
+    if (r.changes === 0) {
+      res.status(404).json({ error: "No entry for that day" });
+      return;
+    }
+    res.status(204).send();
   });
 
   app.get("/api/weight", needUser, (req, res) => {

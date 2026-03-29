@@ -1,4 +1,4 @@
-import type { GroceryResponse, PlannedMeal, Recipe, WeightEntry } from "./types.js";
+import type { GroceryResponse, PlannedMeal, ProgressDay, Recipe, WeightEntry } from "./types.js";
 import { localStore, type OutboxEntry, type OutboxOp } from "./offline/localStore.js";
 import { syncEngine } from "./offline/syncEngine.js";
 import { rawApi } from "./offline/rawApi.js";
@@ -10,6 +10,8 @@ export type {
   PlannedMeal,
   GroceryLine,
   GroceryResponse,
+  ProgressDay,
+  ProgressDayInput,
   WeightEntry,
   WeightUnit,
 } from "./types.js";
@@ -148,6 +150,25 @@ export const api = {
       recipes,
       plan.map((p) => ({ recipeId: p.recipeId, servingsMultiplier: p.servingsMultiplier })),
     );
+  },
+
+  listProgress: async (): Promise<ProgressDay[]> => {
+    const rows = await localStore.getAllProgress();
+    return [...rows].sort((a, b) => a.day.localeCompare(b.day));
+  },
+
+  upsertProgress: async (day: string, body: Omit<ProgressDay, "day">): Promise<ProgressDay> => {
+    const row: ProgressDay = { day, ...body };
+    await localStore.putProgress(row);
+    await enqueue({ kind: "progress.put", day, body });
+    await afterMutation();
+    return row;
+  },
+
+  deleteProgress: async (day: string): Promise<void> => {
+    await localStore.deleteProgress(day);
+    await enqueue({ kind: "progress.delete", day });
+    await afterMutation();
   },
 
   /** Bootstrap local DB from server when app loads (optional). */

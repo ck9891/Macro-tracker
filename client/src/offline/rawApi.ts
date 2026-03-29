@@ -1,9 +1,10 @@
-import type { PlannedMeal, Recipe, WeightEntry } from "../types.js";
+import type { PlannedMeal, ProgressDay, Recipe, WeightEntry } from "../types.js";
 
 export type SyncPack = {
   recipes: Recipe[];
   plan: PlannedMeal[];
   weightEntries: WeightEntry[];
+  progress: ProgressDay[];
   serverTime: string;
 };
 
@@ -58,6 +59,29 @@ export const rawApi = {
     ),
 
   clearPlan: () => fetch("/api/plan", { ...cred, method: "DELETE" }).then((r) => json<void>(r)),
+
+  putProgress: (day: string, body: Omit<ProgressDay, "day">) =>
+    fetch(`/api/progress/${encodeURIComponent(day)}`, {
+      ...cred,
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        calories: body.calories,
+        proteinG: body.proteinG,
+        carbsG: body.carbsG,
+        fatG: body.fatG,
+        weightKg: body.weightKg,
+      }),
+    }).then((r) => json<ProgressDay>(r)),
+
+  deleteProgress: async (day: string) => {
+    const res = await fetch(`/api/progress/${encodeURIComponent(day)}`, {
+      ...cred,
+      method: "DELETE",
+    });
+    if (res.status === 204 || res.status === 404) return;
+    await json<void>(res);
+  },
 
   putWeightEntry: (id: string, body: Omit<WeightEntry, "id">) =>
     fetch(`/api/weight/${encodeURIComponent(id)}`, {
