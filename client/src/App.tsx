@@ -11,6 +11,7 @@ import { ImportRecipePage } from "./pages/ImportRecipePage.js";
 import { RecipeFormPage } from "./pages/RecipeFormPage.js";
 import { LinkLoginPage } from "./pages/LinkLoginPage.js";
 import { LoginPage } from "./pages/LoginPage.js";
+import { WeightPage } from "./pages/WeightPage.js";
 
 export default function App() {
   const { state } = useAuth();
@@ -49,6 +50,9 @@ export default function App() {
           <NavLink to="/grocery" className="nav-link">
             Grocery list
           </NavLink>
+          <NavLink to="/weight" className="nav-link">
+            Weight
+          </NavLink>
           <NavLink to="/import" className="nav-link nav-link-accent">
             Import from photo
           </NavLink>
@@ -66,6 +70,7 @@ export default function App() {
         <Route path="/recipes/:id" element={<RecipeDetailPage />} />
         <Route path="/plan" element={<PlanPage />} />
         <Route path="/grocery" element={<GroceryPage />} />
+        <Route path="/weight" element={<WeightPage />} />
         <Route path="/import" element={<ImportRecipePage />} />
         <Route path="/account" element={<AccountPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

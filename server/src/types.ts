@@ -25,3 +25,15 @@ export type PlannedMealInput = {
 };
 
 export type PlannedMeal = PlannedMealInput & { id: string };
+
+export type WeightUnit = "kg" | "lb";
+
+export type WeightEntryInput = {
+  /** ISO 8601 timestamp (e.g. from datetime-local or Date.toISOString()). */
+  measuredAt: string;
+  weight: number;
+  unit: WeightUnit;
+  note?: string;
+};
+
+export type WeightEntry = WeightEntryInput & { id: string };

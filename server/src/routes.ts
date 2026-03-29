@@ -2,9 +2,9 @@ import type { Express, Request, Response } from "express";
 import type Database from "better-sqlite3";
 import { requireUser, type AuthUser } from "./auth.js";
 import { buildGroceryList, recipeMacrosForBatches } from "./grocery.js";
-import { rowToRecipe } from "./db.js";
-import type { PlannedMealInput, RecipeInput } from "./types.js";
-import { validatePlanPut, validateRecipeInput } from "./validate.js";
+import { rowToRecipe, rowToWeightEntry } from "./db.js";
+import type { PlannedMealInput, RecipeInput, WeightEntryInput } from "./types.js";
+import { validatePlanPut, validateRecipeInput, validateWeightEntryInput } from "./validate.js";
 
 type AuthedRequest = Request & { authUser: AuthUser };
 
@@ -42,6 +42,12 @@ export function registerRoutes(app: Express, db: Database.Database) {
     `,
       )
       .all(uid) as { id: string; recipe_id: string; servings_multiplier: number }[];
+    const weightRows = db
+      .prepare(
+        "SELECT id, measured_at, weight, unit, note FROM weight_entries WHERE user_id = ? ORDER BY measured_at DESC",
+      )
+      .all(uid) as Parameters<typeof rowToWeightEntry>[0][];
+
     res.json({
       recipes: (recipeRows as Parameters<typeof rowToRecipe>[0][]).map(rowToRecipe),
       plan: planRows.map((r) => ({
@@ -49,6 +55,7 @@ export function registerRoutes(app: Express, db: Database.Database) {
         recipeId: r.recipe_id,
         servingsMultiplier: r.servings_multiplier,
       })),
+      weightEntries: weightRows.map(rowToWeightEntry),
       serverTime: new Date().toISOString(),
     });
   });
@@ -268,9 +275,10 @@ export function registerRoutes(app: Express, db: Database.Database) {
       res.status(400).json({ error: "servingsMultiplier must be a positive number" });
       return;
     }
-    db.prepare("UPDATE planned_meals SET servings_multiplier = ? WHERE id = ?").run(
+    db.prepare("UPDATE planned_meals SET servings_multiplier = ? WHERE id = ? AND user_id = ?").run(
       mult,
       req.params.id,
+      userId(req),
     );
     res.json({
       id: row.id,
@@ -338,5 +346,61 @@ export function registerRoutes(app: Express, db: Database.Database) {
       plannedCount: selections.length,
       macroTotals: totals,
     });
+  });
+
+  app.get("/api/weight", needUser, (req, res) => {
+    const uid = userId(req);
+    const rows = db
+      .prepare(
+        "SELECT id, measured_at, weight, unit, note FROM weight_entries WHERE user_id = ? ORDER BY measured_at DESC",
+      )
+      .all(uid) as Parameters<typeof rowToWeightEntry>[0][];
+    res.json(rows.map(rowToWeightEntry));
+  });
+
+  /** Idempotent upsert for offline sync (client supplies id). */
+  app.put("/api/weight/:id", needUser, (req, res) => {
+    const body = parseJsonBody<WeightEntryInput>(req, res);
+    if (!body) return;
+    if (!validateWeightEntryInput(body, res)) return;
+
+    const id = req.params.id;
+    const uid = userId(req);
+    const existing = db.prepare("SELECT user_id FROM weight_entries WHERE id = ?").get(id) as
+      | { user_id: string | null }
+      | undefined;
+    if (existing && existing.user_id !== uid) {
+      res.status(403).json({ error: "Weight entry belongs to another account" });
+      return;
+    }
+    const note = body.note?.trim() ?? null;
+    db.prepare(
+      `
+      INSERT INTO weight_entries (id, user_id, measured_at, weight, unit, note)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        user_id = excluded.user_id,
+        measured_at = excluded.measured_at,
+        weight = excluded.weight,
+        unit = excluded.unit,
+        note = excluded.note
+    `,
+    ).run(id, uid, body.measuredAt, body.weight, body.unit, note);
+
+    const row = db
+      .prepare("SELECT id, measured_at, weight, unit, note FROM weight_entries WHERE id = ? AND user_id = ?")
+      .get(id, uid) as Parameters<typeof rowToWeightEntry>[0];
+    res.json(rowToWeightEntry(row));
+  });
+
+  app.delete("/api/weight/:id", needUser, (req, res) => {
+    const r = db
+      .prepare("DELETE FROM weight_entries WHERE id = ? AND user_id = ?")
+      .run(req.params.id, userId(req));
+    if (r.changes === 0) {
+      res.status(404).json({ error: "Weight entry not found" });
+      return;
+    }
+    res.status(204).send();
   });
 }

@@ -1,4 +1,4 @@
-import type { PlannedMeal, Recipe } from "../types.js";
+import type { PlannedMeal, Recipe, WeightEntry } from "../types.js";
 
 const DB_NAME = "macro-tracker-v1";
 const DB_VERSION = 2;
@@ -9,7 +9,9 @@ export type OutboxOp =
   | { kind: "plan.put"; id: string; recipeId: string; servingsMultiplier: number }
   | { kind: "plan.patch"; id: string; recipeId: string; servingsMultiplier: number }
   | { kind: "plan.delete"; id: string }
-  | { kind: "plan.clear" };
+  | { kind: "plan.clear" }
+  | { kind: "weight.put"; id: string; body: Omit<WeightEntry, "id"> }
+  | { kind: "weight.delete"; id: string };
 
 export type OutboxEntry = {
   id: string;
@@ -37,6 +39,9 @@ function openDb(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains("plan")) {
           db.createObjectStore("plan", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("weight")) {
+          db.createObjectStore("weight", { keyPath: "id" });
         }
         if (!db.objectStoreNames.contains("meta")) {
           db.createObjectStore("meta");
@@ -150,6 +155,44 @@ export const localStore = {
     });
   },
 
+  async getAllWeight(): Promise<WeightEntry[]> {
+    const db = await openDb();
+    const t = db.transaction(["weight"], "readonly");
+    return reqDone(t.objectStore("weight").getAll() as IDBRequest<WeightEntry[]>);
+  },
+
+  async putWeight(entry: WeightEntry): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("weight").put(entry);
+    });
+  },
+
+  async deleteWeight(id: string): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("weight").delete(id);
+    });
+  },
+
+  async replaceWeight(entries: WeightEntry[]): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      const st = t.objectStore("weight");
+      st.clear();
+      for (const e of entries) st.put(e);
+    });
+  },
+
   async getMeta(key: string): Promise<unknown> {
     const db = await openDb();
     const t = db.transaction(["meta"], "readonly");
@@ -179,11 +222,12 @@ export const localStore = {
   async clearAllUserData(): Promise<void> {
     const db = await openDb();
     await new Promise<void>((resolve, reject) => {
-      const t = db.transaction(["recipes", "plan", "meta", "outbox"], "readwrite");
+      const t = db.transaction(["recipes", "plan", "weight", "meta", "outbox"], "readwrite");
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
       t.objectStore("recipes").clear();
       t.objectStore("plan").clear();
+      t.objectStore("weight").clear();
       t.objectStore("meta").clear();
       t.objectStore("outbox").clear();
     });

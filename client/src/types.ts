@@ -37,3 +37,13 @@ export type GroceryResponse = {
   plannedCount: number;
   macroTotals: { calories: number; proteinG: number; carbsG: number; fatG: number };
 };
+
+export type WeightUnit = "kg" | "lb";
+
+export type WeightEntry = {
+  id: string;
+  measuredAt: string;
+  weight: number;
+  unit: WeightUnit;
+  note?: string;
+};
