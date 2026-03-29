@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LEGACY_USER_ID } from "./auth.js";
+import { hashPassword, LEGACY_USER_ID } from "./auth.js";
 import type { Ingredient, ProgressDay, Recipe, RecipeInput, WeightEntry } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -44,6 +44,10 @@ function migrateAuthAndUserScope(db: Database.Database) {
     );
   `);
 
+  if (!tableHasColumn(db, "users", "is_admin")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+  }
+
   if (!tableHasColumn(db, "recipes", "user_id")) {
     db.exec("ALTER TABLE recipes ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
   }
@@ -75,6 +79,33 @@ function migrateAuthAndUserScope(db: Database.Database) {
   db.prepare("UPDATE planned_meals SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
   db.prepare("UPDATE weight_entries SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
   db.prepare("UPDATE daily_progress SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+}
+
+const TEST_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002";
+
+/** Dev (or ENABLE_TEST_ADMIN=1) seeded account with is_admin; credentials from env or defaults. */
+export function seedTestAdmin(db: Database.Database) {
+  const allow =
+    process.env.NODE_ENV !== "production" || process.env.ENABLE_TEST_ADMIN === "1";
+  if (!allow) return;
+
+  const email = (process.env.TEST_ADMIN_EMAIL ?? "test.admin@local").toLowerCase();
+  const password = process.env.TEST_ADMIN_PASSWORD ?? "TestAdmin123!";
+  const passwordHash = hashPassword(password);
+
+  const existing = db.prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE").get(email) as
+    | { id: string }
+    | undefined;
+  if (existing) {
+    db.prepare(
+      "UPDATE users SET password_hash = ?, totp_enabled = 0, totp_secret = NULL, is_admin = 1 WHERE id = ?",
+    ).run(passwordHash, existing.id);
+    return;
+  }
+
+  db.prepare(
+    "INSERT INTO users (id, email, password_hash, totp_enabled, is_admin) VALUES (?, ?, ?, 0, 1)",
+  ).run(TEST_ADMIN_USER_ID, email, passwordHash);
 }
 
 export function openDb() {
@@ -122,6 +153,7 @@ export function openDb() {
   `);
   migrateAuthAndUserScope(db);
   migrateDailyProgressCompositePk(db);
+  seedTestAdmin(db);
   return db;
 }
 
