@@ -1,9 +1,9 @@
 import type { Express, Request, Response } from "express";
 import type Database from "better-sqlite3";
 import { buildGroceryList, recipeMacrosForBatches } from "./grocery.js";
-import { rowToRecipe } from "./db.js";
-import type { PlannedMealInput, RecipeInput } from "./types.js";
-import { validatePlanPut, validateRecipeInput } from "./validate.js";
+import { rowToRecipe, rowToWeightEntry } from "./db.js";
+import type { PlannedMealInput, RecipeInput, WeightEntryInput } from "./types.js";
+import { validatePlanPut, validateRecipeInput, validateWeightEntryInput } from "./validate.js";
 
 function parseJsonBody<T>(req: Request, res: Response): T | null {
   if (!req.body || typeof req.body !== "object") {
@@ -29,6 +29,10 @@ export function registerRoutes(app: Express, db: Database.Database) {
     `,
       )
       .all() as { id: string; recipe_id: string; servings_multiplier: number }[];
+    const weightRows = db
+      .prepare("SELECT id, measured_at, weight, unit, note FROM weight_entries ORDER BY measured_at DESC")
+      .all() as Parameters<typeof rowToWeightEntry>[0][];
+
     res.json({
       recipes: (recipeRows as Parameters<typeof rowToRecipe>[0][]).map(rowToRecipe),
       plan: planRows.map((r) => ({
@@ -36,6 +40,7 @@ export function registerRoutes(app: Express, db: Database.Database) {
         recipeId: r.recipe_id,
         servingsMultiplier: r.servings_multiplier,
       })),
+      weightEntries: weightRows.map(rowToWeightEntry),
       serverTime: new Date().toISOString(),
     });
   });
@@ -288,5 +293,47 @@ export function registerRoutes(app: Express, db: Database.Database) {
       plannedCount: selections.length,
       macroTotals: totals,
     });
+  });
+
+  app.get("/api/weight", (_req, res) => {
+    const rows = db
+      .prepare("SELECT id, measured_at, weight, unit, note FROM weight_entries ORDER BY measured_at DESC")
+      .all() as Parameters<typeof rowToWeightEntry>[0][];
+    res.json(rows.map(rowToWeightEntry));
+  });
+
+  /** Idempotent upsert for offline sync (client supplies id). */
+  app.put("/api/weight/:id", (req, res) => {
+    const body = parseJsonBody<WeightEntryInput>(req, res);
+    if (!body) return;
+    if (!validateWeightEntryInput(body, res)) return;
+
+    const id = req.params.id;
+    const note = body.note?.trim() ?? null;
+    db.prepare(
+      `
+      INSERT INTO weight_entries (id, measured_at, weight, unit, note)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        measured_at = excluded.measured_at,
+        weight = excluded.weight,
+        unit = excluded.unit,
+        note = excluded.note
+    `,
+    ).run(id, body.measuredAt, body.weight, body.unit, note);
+
+    const row = db
+      .prepare("SELECT id, measured_at, weight, unit, note FROM weight_entries WHERE id = ?")
+      .get(id) as Parameters<typeof rowToWeightEntry>[0];
+    res.json(rowToWeightEntry(row));
+  });
+
+  app.delete("/api/weight/:id", (req, res) => {
+    const r = db.prepare("DELETE FROM weight_entries WHERE id = ?").run(req.params.id);
+    if (r.changes === 0) {
+      res.status(404).json({ error: "Weight entry not found" });
+      return;
+    }
+    res.status(204).send();
   });
 }
