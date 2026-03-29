@@ -482,3 +482,154 @@ a {
   color: var(--accent);
   font-size: 0.82rem;
 }
+
+/* Exercise coach (pose + camera) */
+.exercise-coach-toolbar {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.exercise-coach-field {
+  margin-bottom: 0;
+  min-width: 200px;
+}
+
+.exercise-coach-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.exercise-coach-layout {
+  display: grid;
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 300px);
+  margin-bottom: 1.5rem;
+}
+
+@media (max-width: 800px) {
+  .exercise-coach-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.exercise-coach-video-wrap {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  max-height: min(70vh, 560px);
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.exercise-coach-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.exercise-coach-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.exercise-coach-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 0.95rem;
+  pointer-events: none;
+}
+
+.exercise-coach-stats-title {
+  margin-bottom: 0.25rem;
+}
+
+.exercise-coach-dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.exercise-coach-dl > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.exercise-coach-dl dt {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.exercise-coach-dl dd {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  text-align: right;
+}
+
+.exercise-coach-reps {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.exercise-coach-phase {
+  text-transform: capitalize;
+}
+
+.exercise-coach-cue {
+  margin: 0.5rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  font-size: 0.9rem;
+}
+
+.exercise-coach-cue-muted {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.exercise-coach-disclaimer {
+  margin: 1rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.exercise-coach-help ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.exercise-coach-help li {
+  margin-bottom: 0.5rem;
+}
+
+.exercise-coach-help strong {
+  color: var(--text);
+}

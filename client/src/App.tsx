@@ -13,6 +13,7 @@ import { ProgressPage } from "./pages/ProgressPage.js";
 import { LinkLoginPage } from "./pages/LinkLoginPage.js";
 import { LoginPage } from "./pages/LoginPage.js";
 import { WeightPage } from "./pages/WeightPage.js";
+import { ExerciseCoachPage } from "./pages/ExerciseCoachPage.js";
 
 export default function App() {
   const { state } = useAuth();
@@ -57,6 +58,9 @@ export default function App() {
           <NavLink to="/weight" className="nav-link">
             Weight
           </NavLink>
+          <NavLink to="/exercise" className="nav-link">
+            Exercise
+          </NavLink>
           <NavLink to="/import" className="nav-link nav-link-accent">
             Import from photo
           </NavLink>
@@ -76,6 +80,7 @@ export default function App() {
         <Route path="/grocery" element={<GroceryPage />} />
         <Route path="/progress" element={<ProgressPage />} />
         <Route path="/weight" element={<WeightPage />} />
+        <Route path="/exercise" element={<ExerciseCoachPage />} />
         <Route path="/import" element={<ImportRecipePage />} />
         <Route path="/account" element={<AccountPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
