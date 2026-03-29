@@ -391,3 +391,25 @@ a {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+.auth-page {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+}
+
+.auth-card {
+  margin-top: 0.5rem;
+}
+
+.auth-magic-result {
+  margin-top: 1rem;
+}
+
+.magic-link-anchor {
+  display: block;
+  word-break: break-all;
+  margin-top: 0.5rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+}

@@ -2,16 +2,75 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { LEGACY_USER_ID } from "./auth.js";
 import type { Ingredient, Recipe, RecipeInput } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.DATABASE_PATH ?? path.join(__dirname, "..", "data", "app.db");
+
+function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return rows.some((r) => r.name === column);
+}
+
+function migrateAuthAndUserScope(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT,
+      totp_secret TEXT,
+      totp_enabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      method TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE TABLE IF NOT EXISTS magic_login_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  if (!tableHasColumn(db, "recipes", "user_id")) {
+    db.exec("ALTER TABLE recipes ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
+  }
+  if (!tableHasColumn(db, "planned_meals", "user_id")) {
+    db.exec(
+      "ALTER TABLE planned_meals ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
+    );
+  }
+
+  const legacyEmail = "legacy@local";
+  const hasLegacy = db.prepare("SELECT 1 FROM users WHERE id = ?").get(LEGACY_USER_ID);
+  if (!hasLegacy) {
+    db.prepare(
+      "INSERT INTO users (id, email, password_hash, totp_enabled) VALUES (?, ?, NULL, 0)",
+    ).run(LEGACY_USER_ID, legacyEmail);
+  }
+
+  db.prepare("UPDATE recipes SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+  db.prepare("UPDATE planned_meals SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+}
 
 export function openDb() {
   const dir = path.dirname(dbPath);
   fs.mkdirSync(dir, { recursive: true });
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
   db.exec(`
     CREATE TABLE IF NOT EXISTS recipes (
       id TEXT PRIMARY KEY,
@@ -33,6 +92,7 @@ export function openDb() {
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
     );
   `);
+  migrateAuthAndUserScope(db);
   return db;
 }
 
@@ -115,14 +175,15 @@ export function seedIfEmpty(db: Database.Database) {
   ];
 
   const insert = db.prepare(`
-    INSERT INTO recipes (id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
-    VALUES (@id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
+    INSERT INTO recipes (id, user_id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
+    VALUES (@id, @user_id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
   `);
 
   for (const r of samples) {
     const id = crypto.randomUUID();
     insert.run({
       id,
+      user_id: LEGACY_USER_ID,
       name: r.name,
       duration_minutes: r.durationMinutes,
       servings: r.servings,

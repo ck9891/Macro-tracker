@@ -1,7 +1,7 @@
 import type { PlannedMeal, Recipe } from "../types.js";
 
 const DB_NAME = "macro-tracker-v1";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export type OutboxOp =
   | { kind: "recipe.put"; id: string; body: Omit<Recipe, "id"> }
@@ -25,8 +25,13 @@ function openDb(): Promise<IDBDatabase> {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onerror = () => reject(req.error);
       req.onsuccess = () => resolve(req.result);
-      req.onupgradeneeded = () => {
+      req.onupgradeneeded = (ev) => {
         const db = req.result;
+        if (ev.oldVersion < 2 && ev.oldVersion > 0) {
+          for (const name of Array.from(db.objectStoreNames)) {
+            db.deleteObjectStore(name);
+          }
+        }
         if (!db.objectStoreNames.contains("recipes")) {
           db.createObjectStore("recipes", { keyPath: "id" });
         }
@@ -158,6 +163,29 @@ export const localStore = {
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
       t.objectStore("meta").put(value, key);
+    });
+  },
+
+  async deleteMeta(key: string): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["meta"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("meta").delete(key);
+    });
+  },
+
+  async clearAllUserData(): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["recipes", "plan", "meta", "outbox"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("recipes").clear();
+      t.objectStore("plan").clear();
+      t.objectStore("meta").clear();
+      t.objectStore("outbox").clear();
     });
   },
 
