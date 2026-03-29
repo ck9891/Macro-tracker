@@ -2,8 +2,31 @@ import type { Express, Request, Response } from "express";
 import type Database from "better-sqlite3";
 import { buildGroceryList, recipeMacrosForBatches } from "./grocery.js";
 import { rowToRecipe } from "./db.js";
-import type { PlannedMealInput, RecipeInput } from "./types.js";
-import { validatePlanPut, validateRecipeInput } from "./validate.js";
+import type { PlannedMealInput, ProgressDay, ProgressDayInput, RecipeInput } from "./types.js";
+import {
+  isValidDayParam,
+  validatePlanPut,
+  validateProgressInput,
+  validateRecipeInput,
+} from "./validate.js";
+
+function rowToProgressDay(row: {
+  day: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  weight_kg: number | null;
+}): ProgressDay {
+  return {
+    day: row.day,
+    calories: row.calories,
+    proteinG: row.protein_g,
+    carbsG: row.carbs_g,
+    fatG: row.fat_g,
+    weightKg: row.weight_kg == null ? null : row.weight_kg,
+  };
+}
 
 function parseJsonBody<T>(req: Request, res: Response): T | null {
   if (!req.body || typeof req.body !== "object") {
@@ -29,6 +52,16 @@ export function registerRoutes(app: Express, db: Database.Database) {
     `,
       )
       .all() as { id: string; recipe_id: string; servings_multiplier: number }[];
+    const progressRows = db
+      .prepare("SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress ORDER BY day")
+      .all() as {
+      day: string;
+      calories: number;
+      protein_g: number;
+      carbs_g: number;
+      fat_g: number;
+      weight_kg: number | null;
+    }[];
     res.json({
       recipes: (recipeRows as Parameters<typeof rowToRecipe>[0][]).map(rowToRecipe),
       plan: planRows.map((r) => ({
@@ -36,6 +69,7 @@ export function registerRoutes(app: Express, db: Database.Database) {
         recipeId: r.recipe_id,
         servingsMultiplier: r.servings_multiplier,
       })),
+      progress: progressRows.map(rowToProgressDay),
       serverTime: new Date().toISOString(),
     });
   });
@@ -288,5 +322,64 @@ export function registerRoutes(app: Express, db: Database.Database) {
       plannedCount: selections.length,
       macroTotals: totals,
     });
+  });
+
+  app.get("/api/progress", (_req, res) => {
+    const rows = db
+      .prepare("SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress ORDER BY day")
+      .all() as {
+      day: string;
+      calories: number;
+      protein_g: number;
+      carbs_g: number;
+      fat_g: number;
+      weight_kg: number | null;
+    }[];
+    res.json(rows.map(rowToProgressDay));
+  });
+
+  app.put("/api/progress/:day", (req, res) => {
+    const day = req.params.day;
+    if (!isValidDayParam(day)) {
+      res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      return;
+    }
+    const body = parseJsonBody<ProgressDayInput>(req, res);
+    if (!body) return;
+    if (!validateProgressInput(body, res)) return;
+
+    const weightKg = body.weightKg == null ? null : body.weightKg;
+    db.prepare(
+      `
+      INSERT INTO daily_progress (day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(day) DO UPDATE SET
+        calories = excluded.calories,
+        protein_g = excluded.protein_g,
+        carbs_g = excluded.carbs_g,
+        fat_g = excluded.fat_g,
+        weight_kg = excluded.weight_kg,
+        updated_at = excluded.updated_at
+    `,
+    ).run(day, body.calories, body.proteinG, body.carbsG, body.fatG, weightKg);
+
+    const row = db
+      .prepare("SELECT day, calories, protein_g, carbs_g, fat_g, weight_kg FROM daily_progress WHERE day = ?")
+      .get(day) as Parameters<typeof rowToProgressDay>[0];
+    res.json(rowToProgressDay(row));
+  });
+
+  app.delete("/api/progress/:day", (req, res) => {
+    const day = req.params.day;
+    if (!isValidDayParam(day)) {
+      res.status(400).json({ error: "day must be YYYY-MM-DD" });
+      return;
+    }
+    const r = db.prepare("DELETE FROM daily_progress WHERE day = ?").run(day);
+    if (r.changes === 0) {
+      res.status(404).json({ error: "No entry for that day" });
+      return;
+    }
+    res.status(204).send();
   });
 }

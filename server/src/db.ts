@@ -32,6 +32,15 @@ export function openDb() {
       servings_multiplier REAL NOT NULL DEFAULT 1,
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS daily_progress (
+      day TEXT PRIMARY KEY,
+      calories REAL NOT NULL,
+      protein_g REAL NOT NULL,
+      carbs_g REAL NOT NULL,
+      fat_g REAL NOT NULL,
+      weight_kg REAL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
   return db;
 }
