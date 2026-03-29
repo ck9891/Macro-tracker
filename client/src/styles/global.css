@@ -503,6 +503,36 @@ a {
   gap: 0.5rem;
 }
 
+.exercise-coach-option-row {
+  flex-basis: 100%;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+}
+
+.exercise-coach-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.exercise-coach-check input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent);
+}
+
+.exercise-coach-check-sub {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.exercise-coach-barpath-hint {
+  margin-top: 0.65rem;
+}
+
 .exercise-coach-layout {
   display: grid;
   gap: 1.25rem;

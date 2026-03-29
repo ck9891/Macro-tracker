@@ -1,6 +1,15 @@
 import { DrawingUtils, FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  barPathCue,
+  clearBarPathTrail,
+  drawBarPathOnCanvas,
+  lateralSpreadNorm,
+  pushBarPathSample,
+  barProxyNormalized,
+  type BarPathNormPoint,
+} from "../lib/barPathTracking.js";
+import {
   type ExerciseKind,
   type RepModel,
   type RepPhase,
@@ -23,6 +32,10 @@ const initialRepState = (): { reps: number; phase: RepPhase; lastPrimary: number
   phase: "idle",
   lastPrimary: null,
 });
+
+function exerciseUsesBarProxy(k: ExerciseKind): boolean {
+  return k === "barbell_squat" || k === "deadlift" || k === "ohp";
+}
 
 function exerciseLabel(k: ExerciseKind): string {
   switch (k) {
@@ -55,6 +68,9 @@ export function ExerciseCoachPage() {
   const lastSecondaryRef = useRef<number | null>(null);
   const customRepModelsRef = useRef<Partial<Record<ExerciseKind, RepModel>>>({});
   const pendingCalibrationTopRef = useRef<number | null>(null);
+  const barPathTrailRef = useRef<BarPathNormPoint[]>([]);
+  const trackBarPathRef = useRef(false);
+  const barPathFrameCountRef = useRef(0);
 
   const [exercise, setExercise] = useState<ExerciseKind>("squat");
   const [cameraOn, setCameraOn] = useState(false);
@@ -68,6 +84,19 @@ export function ExerciseCoachPage() {
   const [calibrationMessage, setCalibrationMessage] = useState<string | null>(null);
   const [usingCustomRom, setUsingCustomRom] = useState(false);
   const [awaitingBottomCapture, setAwaitingBottomCapture] = useState(false);
+  const [trackBarPath, setTrackBarPath] = useState(false);
+  const [barPathSpreadText, setBarPathSpreadText] = useState<string | null>(null);
+  const [barPathHint, setBarPathHint] = useState<string | null>(null);
+
+  useEffect(() => {
+    trackBarPathRef.current = trackBarPath;
+    if (!trackBarPath) {
+      clearBarPathTrail(barPathTrailRef.current);
+      barPathFrameCountRef.current = 0;
+      setBarPathSpreadText(null);
+      setBarPathHint(null);
+    }
+  }, [trackBarPath]);
 
   useEffect(() => {
     exerciseRef.current = exercise;
@@ -146,6 +175,10 @@ export function ExerciseCoachPage() {
     pendingCalibrationTopRef.current = null;
     setAwaitingBottomCapture(false);
     setCalibrationMessage(null);
+    clearBarPathTrail(barPathTrailRef.current);
+    barPathFrameCountRef.current = 0;
+    setBarPathSpreadText(null);
+    setBarPathHint(null);
   }, []);
 
   const processFrame = useCallback(() => {
@@ -191,6 +224,27 @@ export function ExerciseCoachPage() {
       });
       draw.drawLandmarks(mirrored, { color: "#e8ecf2", lineWidth: 1, radius: 3 });
 
+      if (trackBarPathRef.current) {
+        const proxy = barProxyNormalized(raw);
+        pushBarPathSample(barPathTrailRef.current, proxy);
+        drawBarPathOnCanvas(ctx, barPathTrailRef.current, w, h);
+        barPathFrameCountRef.current += 1;
+        if (barPathFrameCountRef.current % 5 === 0) {
+          const spread = lateralSpreadNorm(barPathTrailRef.current, 48);
+          if (spread != null) {
+            setBarPathSpreadText(`${(spread * 100).toFixed(1)}%`);
+            setBarPathHint(barPathCue(spread, exerciseUsesBarProxy(exerciseRef.current)));
+          } else {
+            setBarPathSpreadText(null);
+            setBarPathHint(
+              proxy == null
+                ? "Show both hands on the bar to trace the wrist midpoint path."
+                : null,
+            );
+          }
+        }
+      }
+
       const kind = exerciseRef.current;
       const { primary, secondary } = measureExercise(kind, raw);
       lastPrimaryRef.current = primary;
@@ -211,6 +265,10 @@ export function ExerciseCoachPage() {
       setAngleText("—");
       setSecondaryAngleText(null);
       setCue("No pose detected — stay in frame.");
+      if (trackBarPathRef.current) {
+        setBarPathSpreadText(null);
+        setBarPathHint(null);
+      }
     }
 
     rafRef.current = requestAnimationFrame(processFrame);
@@ -373,6 +431,18 @@ export function ExerciseCoachPage() {
             </button>
           )}
         </div>
+        <div className="exercise-coach-option-row">
+          <label className="exercise-coach-check">
+            <input
+              type="checkbox"
+              checked={trackBarPath}
+              onChange={(e) => setTrackBarPath(e.target.checked)}
+            />
+            <span>
+              Track bar path <span className="exercise-coach-check-sub">(wrist midpoint proxy)</span>
+            </span>
+          </label>
+        </div>
       </div>
 
       {cameraOn ? (
@@ -439,6 +509,12 @@ export function ExerciseCoachPage() {
                 <dd>{secondaryAngleText ?? "—"}</dd>
               </div>
             ) : null}
+            {trackBarPath ? (
+              <div>
+                <dt>Path lateral drift</dt>
+                <dd>{barPathSpreadText ?? "—"}</dd>
+              </div>
+            ) : null}
           </dl>
           {cue ? (
             <p className="exercise-coach-cue" role="status">
@@ -447,9 +523,15 @@ export function ExerciseCoachPage() {
           ) : (
             <p className="exercise-coach-cue-muted">Form tips appear as you move.</p>
           )}
+          {trackBarPath && barPathHint ? (
+            <p className="exercise-coach-cue exercise-coach-barpath-hint" role="status">
+              {barPathHint}
+            </p>
+          ) : null}
           <p className="exercise-coach-disclaimer">
-            Barbell path and spine loading are not measured — only joint angles in 2D. This does not replace a
-            qualified coach.
+            {trackBarPath
+              ? "Bar path is a wrist-midpoint estimate (not the bar shaft). Side camera + both hands visible works best. Not medical or coaching advice."
+              : "Optional bar path uses wrist midpoints as a proxy when both hands are visible. True bar tracking needs dedicated CV. This does not replace a qualified coach."}
           </p>
         </aside>
       </div>
@@ -465,14 +547,16 @@ export function ExerciseCoachPage() {
         <ul>
           <li>
             <strong>Squat / barbell squat:</strong> knee flexion (hip–knee–ankle). Barbell mode adds a rough
-            forward-lean cue from torso vs vertical (not the bar).
+            forward-lean cue from torso vs vertical. Optional <strong>Track bar path</strong> draws the wrist
+            midpoint trail (best with side camera and both hands on the bar).
           </li>
           <li>
-            <strong>Deadlift:</strong> hip hinge angle (torso vs vertical). Knee angle is shown as a secondary
-            hint only.
+            <strong>Deadlift:</strong> hip hinge angle (torso vs vertical). Same optional path overlay applies
+            when both wrists are visible on the bar.
           </li>
           <li>
-            <strong>Overhead press:</strong> elbow flexion; lockout finishes the rep. Bar path is not tracked.
+            <strong>Overhead press:</strong> elbow flexion; lockout finishes the rep. Enable{" "}
+            <strong>Track bar path</strong> to overlay the wrist-midpoint trail (rough vertical-line check).
           </li>
           <li>
             <strong>Push-up:</strong> elbow angle; same idea as OHP but horizontal.
