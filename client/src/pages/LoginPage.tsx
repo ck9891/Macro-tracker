@@ -39,6 +39,12 @@ export function LoginPage() {
         Use email and password, add an authenticator app for one-time codes, or{" "}
         <Link to="/login/link">sign in with a link</Link> (60-day session).
       </p>
+      {import.meta.env.DEV ? (
+        <p className="subtle" style={{ marginTop: "-0.25rem", marginBottom: "1rem" }}>
+          Dev: sign in as test admin with <span className="mono">test.admin@local</span> /{" "}
+          <span className="mono">TestAdmin123!</span> (full admin privileges).
+        </p>
+      ) : null}
       {error ? <div className="error-banner">{error}</div> : null}
       <form className="auth-card card" onSubmit={submit}>
         <div className="field">

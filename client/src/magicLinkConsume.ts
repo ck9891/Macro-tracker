@@ -1,6 +1,6 @@
-import { authApi } from "./authApi.js";
+import { authApi, type AuthUser } from "./authApi.js";
 
-const inFlight = new Map<string, Promise<{ user: { id: string; email: string; totpEnabled: boolean } }>>();
+const inFlight = new Map<string, Promise<{ user: AuthUser }>>();
 
 export function consumeMagicLinkOnce(token: string) {
   let p = inFlight.get(token);
