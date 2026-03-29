@@ -2,11 +2,15 @@ import { DrawingUtils, FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ExerciseKind,
+  type RepModel,
   type RepPhase,
+  DEFAULT_REP_MODEL,
+  flexionModelFromCalibration,
   formCue,
+  measureExercise,
   mirrorLandmarks,
-  pickPushupAngle,
-  pickSquatAngle,
+  primaryMetricLabel,
+  torsoFoldModelFromCalibration,
   updateRepState,
 } from "../lib/exercisePoseAnalysis.js";
 
@@ -14,11 +18,30 @@ const WASM_BASE = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.21/
 const MODEL_URL =
   "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
 
-const initialRepState = (): { reps: number; phase: RepPhase; lastAngle: number | null } => ({
+const initialRepState = (): { reps: number; phase: RepPhase; lastPrimary: number | null } => ({
   reps: 0,
   phase: "idle",
-  lastAngle: null,
+  lastPrimary: null,
 });
+
+function exerciseLabel(k: ExerciseKind): string {
+  switch (k) {
+    case "squat":
+      return "Squat";
+    case "pushup":
+      return "Push-up";
+    case "barbell_squat":
+      return "Barbell squat";
+    case "deadlift":
+      return "Deadlift";
+    case "ohp":
+      return "Overhead press";
+    default: {
+      const _n: never = k;
+      return _n;
+    }
+  }
+}
 
 export function ExerciseCoachPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -28,6 +51,10 @@ export function ExerciseCoachPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const repRef = useRef(initialRepState());
   const exerciseRef = useRef<ExerciseKind>("squat");
+  const lastPrimaryRef = useRef<number | null>(null);
+  const lastSecondaryRef = useRef<number | null>(null);
+  const customRepModelsRef = useRef<Partial<Record<ExerciseKind, RepModel>>>({});
+  const pendingCalibrationTopRef = useRef<number | null>(null);
 
   const [exercise, setExercise] = useState<ExerciseKind>("squat");
   const [cameraOn, setCameraOn] = useState(false);
@@ -36,7 +63,11 @@ export function ExerciseCoachPage() {
   const [reps, setReps] = useState(0);
   const [phase, setPhase] = useState<RepPhase>("idle");
   const [angleText, setAngleText] = useState("—");
+  const [secondaryAngleText, setSecondaryAngleText] = useState<string | null>(null);
   const [cue, setCue] = useState<string | null>(null);
+  const [calibrationMessage, setCalibrationMessage] = useState<string | null>(null);
+  const [usingCustomRom, setUsingCustomRom] = useState(false);
+  const [awaitingBottomCapture, setAwaitingBottomCapture] = useState(false);
 
   useEffect(() => {
     exerciseRef.current = exercise;
@@ -44,7 +75,9 @@ export function ExerciseCoachPage() {
     setReps(0);
     setPhase("idle");
     setAngleText("—");
+    setSecondaryAngleText(null);
     setCue(null);
+    setUsingCustomRom(!!customRepModelsRef.current[exercise]);
   }, [exercise]);
 
   useEffect(() => {
@@ -110,6 +143,9 @@ export function ExerciseCoachPage() {
       v.srcObject = null;
     }
     setCameraOn(false);
+    pendingCalibrationTopRef.current = null;
+    setAwaitingBottomCapture(false);
+    setCalibrationMessage(null);
   }, []);
 
   const processFrame = useCallback(() => {
@@ -156,14 +192,24 @@ export function ExerciseCoachPage() {
       draw.drawLandmarks(mirrored, { color: "#e8ecf2", lineWidth: 1, radius: 3 });
 
       const kind = exerciseRef.current;
-      const angleDeg = kind === "squat" ? pickSquatAngle(raw) : pickPushupAngle(raw);
-      repRef.current = updateRepState(kind, angleDeg, repRef.current);
+      const { primary, secondary } = measureExercise(kind, raw);
+      lastPrimaryRef.current = primary;
+      lastSecondaryRef.current = secondary;
+
+      const model = customRepModelsRef.current[kind] ?? DEFAULT_REP_MODEL[kind];
+      repRef.current = updateRepState(primary, repRef.current, model);
       setReps(repRef.current.reps);
       setPhase(repRef.current.phase);
-      setAngleText(Number.isFinite(angleDeg) ? `${Math.round(angleDeg)}°` : "—");
-      setCue(formCue(kind, angleDeg, repRef.current.phase));
+      setAngleText(Number.isFinite(primary) ? `${Math.round(primary)}°` : "—");
+      setSecondaryAngleText(
+        secondary != null && Number.isFinite(secondary) ? `${Math.round(secondary)}°` : null,
+      );
+      setCue(formCue(kind, primary, secondary, repRef.current.phase));
     } else {
+      lastPrimaryRef.current = null;
+      lastSecondaryRef.current = null;
       setAngleText("—");
+      setSecondaryAngleText(null);
       setCue("No pose detected — stay in frame.");
     }
 
@@ -204,6 +250,76 @@ export function ExerciseCoachPage() {
     }
   }, [processFrame]);
 
+  const captureCalibrationTop = useCallback(() => {
+    setCalibrationMessage(null);
+    const kind = exerciseRef.current;
+    const v = lastPrimaryRef.current;
+    if (!Number.isFinite(v ?? NaN)) {
+      setCalibrationMessage("Wait until the pose is detected, then try again.");
+      return;
+    }
+    pendingCalibrationTopRef.current = v as number;
+    setAwaitingBottomCapture(true);
+    if (kind === "deadlift") {
+      setCalibrationMessage(
+        `Upright hinge saved (${Math.round(v as number)}°). Hinge down, then tap “Capture bottom”.`,
+      );
+    } else {
+      setCalibrationMessage(
+        `Lockout saved (${Math.round(v as number)}°). Move to your deepest position, then tap “Capture bottom”.`,
+      );
+    }
+  }, []);
+
+  const captureCalibrationBottom = useCallback(() => {
+    const kind = exerciseRef.current;
+    const top = pendingCalibrationTopRef.current;
+    const bottom = lastPrimaryRef.current;
+    if (top == null) {
+      setCalibrationMessage("Tap “Capture top” first (lockout or upright stance).");
+      return;
+    }
+    if (!Number.isFinite(bottom ?? NaN)) {
+      setCalibrationMessage("Pose not visible — hold the bottom position and try again.");
+      return;
+    }
+    const b = bottom as number;
+
+    if (DEFAULT_REP_MODEL[kind].kind === "torso_fold") {
+      if (b <= top + 8) {
+        setCalibrationMessage("Bottom should be more folded than top. Hinge deeper and capture again.");
+        return;
+      }
+      customRepModelsRef.current[kind] = torsoFoldModelFromCalibration(top, b);
+    } else {
+      if (top <= b + 8) {
+        setCalibrationMessage("Top angle should be more open than bottom. Recapture in order.");
+        return;
+      }
+      customRepModelsRef.current[kind] = flexionModelFromCalibration(top, b);
+    }
+
+    pendingCalibrationTopRef.current = null;
+    setAwaitingBottomCapture(false);
+    repRef.current = initialRepState();
+    setReps(0);
+    setPhase("idle");
+    setUsingCustomRom(true);
+    setCalibrationMessage(`Custom ROM saved for ${exerciseLabel(kind)}. Rep counter reset.`);
+  }, []);
+
+  const clearCalibration = useCallback(() => {
+    const kind = exerciseRef.current;
+    delete customRepModelsRef.current[kind];
+    setUsingCustomRom(false);
+    setAwaitingBottomCapture(false);
+    pendingCalibrationTopRef.current = null;
+    repRef.current = initialRepState();
+    setReps(0);
+    setPhase("idle");
+    setCalibrationMessage("Using default thresholds for this exercise.");
+  }, []);
+
   useEffect(() => {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -211,12 +327,17 @@ export function ExerciseCoachPage() {
     };
   }, []);
 
+  const secondaryLabel =
+    exercise === "barbell_squat" ? "Torso vs vertical" : exercise === "deadlift" ? "Knee angle" : null;
+
   return (
     <div className="exercise-coach-page">
       <h1 className="page-title">Exercise coach</h1>
       <p className="page-lede">
         Uses your camera and on-device pose estimation to count reps and suggest simple form cues. Video
-        stays in your browser; nothing is uploaded.
+        stays in your browser; nothing is uploaded. Angles are computed from your joints in the frame, so
+        they scale to any height — optional calibration tunes reps to your range of motion for this
+        session only.
       </p>
 
       {error ? (
@@ -235,6 +356,9 @@ export function ExerciseCoachPage() {
             disabled={cameraOn}
           >
             <option value="squat">Squat</option>
+            <option value="barbell_squat">Barbell squat</option>
+            <option value="deadlift">Deadlift</option>
+            <option value="ohp">Overhead press</option>
             <option value="pushup">Push-up</option>
           </select>
         </div>
@@ -251,6 +375,39 @@ export function ExerciseCoachPage() {
         </div>
       </div>
 
+      {cameraOn ? (
+        <div className="card exercise-coach-calibration">
+          <h2 className="exercise-coach-calibration-title">ROM calibration (this session)</h2>
+          <p className="exercise-coach-calibration-lede">
+            Default thresholds work for many people. Capture <strong>top</strong> then <strong>bottom</strong>{" "}
+            to align rep counting with <em>your</em> lockout and depth. Not saved to the server.
+          </p>
+          <div className="exercise-coach-calibration-row">
+            <button type="button" className="btn" onClick={captureCalibrationTop}>
+              {exercise === "deadlift" ? "1. Capture upright" : "1. Capture lockout"}
+            </button>
+            <button type="button" className="btn" onClick={captureCalibrationBottom}>
+              {exercise === "deadlift" ? "2. Capture hinge bottom" : "2. Capture bottom depth"}
+            </button>
+            {usingCustomRom ? (
+              <button type="button" className="btn btn-ghost" onClick={clearCalibration}>
+                Clear custom ROM
+              </button>
+            ) : null}
+          </div>
+          {awaitingBottomCapture ? (
+            <p className="exercise-coach-calibration-waiting" role="status">
+              Waiting for bottom capture…
+            </p>
+          ) : null}
+          {calibrationMessage ? (
+            <p className="exercise-coach-calibration-msg" role="status">
+              {calibrationMessage}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="exercise-coach-layout">
         <div className="exercise-coach-video-wrap card">
           <video ref={videoRef} className="exercise-coach-video" playsInline muted />
@@ -260,6 +417,9 @@ export function ExerciseCoachPage() {
 
         <aside className="exercise-coach-stats card">
           <h2 className="exercise-coach-stats-title">Session</h2>
+          <p className="exercise-coach-rom-badge">
+            {usingCustomRom ? "Custom ROM" : "Default thresholds"}
+          </p>
           <dl className="exercise-coach-dl">
             <div>
               <dt>Reps</dt>
@@ -270,9 +430,15 @@ export function ExerciseCoachPage() {
               <dd className="exercise-coach-phase">{phase}</dd>
             </div>
             <div>
-              <dt>Joint angle</dt>
+              <dt>{primaryMetricLabel(exercise)}</dt>
               <dd>{angleText}</dd>
             </div>
+            {secondaryLabel ? (
+              <div>
+                <dt>{secondaryLabel}</dt>
+                <dd>{secondaryAngleText ?? "—"}</dd>
+              </div>
+            ) : null}
           </dl>
           {cue ? (
             <p className="exercise-coach-cue" role="status">
@@ -282,24 +448,41 @@ export function ExerciseCoachPage() {
             <p className="exercise-coach-cue-muted">Form tips appear as you move.</p>
           )}
           <p className="exercise-coach-disclaimer">
-            This is a lightweight demo: lighting, camera angle, and clothing affect accuracy. It does not
-            replace a qualified coach.
+            Barbell path and spine loading are not measured — only joint angles in 2D. This does not replace a
+            qualified coach.
           </p>
         </aside>
       </div>
 
       <section className="card exercise-coach-help">
-        <h2>How to use</h2>
+        <h2>How it works</h2>
+        <p className="exercise-coach-help-intro">
+          Heights from 5′2″ to 6′1″ (and beyond) are fine: the model outputs <strong>normalized</strong> joint
+          positions; we turn those into <strong>angles</strong>, which do not depend on how many pixels tall you
+          are. Camera distance and lens still change perspective, so side or 45° views work best for squats
+          and deadlifts.
+        </p>
         <ul>
           <li>
-            <strong>Squat:</strong> stand side-on or at a slight angle so your hip, knee, and ankle are visible.
-            We track knee flexion and count a rep when you stand tall again.
+            <strong>Squat / barbell squat:</strong> knee flexion (hip–knee–ankle). Barbell mode adds a rough
+            forward-lean cue from torso vs vertical (not the bar).
           </li>
           <li>
-            <strong>Push-up:</strong> frame your upper body; we track elbow angle. Full extension at the top
-            completes a rep.
+            <strong>Deadlift:</strong> hip hinge angle (torso vs vertical). Knee angle is shown as a secondary
+            hint only.
+          </li>
+          <li>
+            <strong>Overhead press:</strong> elbow flexion; lockout finishes the rep. Bar path is not tracked.
+          </li>
+          <li>
+            <strong>Push-up:</strong> elbow angle; same idea as OHP but horizontal.
           </li>
         </ul>
+        <p className="exercise-coach-help-foot">
+          <strong>Calibration:</strong> optional, once per exercise per browser session. It does not “learn”
+          you over time — it just snapshots your top and bottom once so thresholds match your ROM. Clear it to
+          return to defaults.
+        </p>
       </section>
     </div>
   );

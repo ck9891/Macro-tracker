@@ -633,3 +633,46 @@ a {
 .exercise-coach-help strong {
   color: var(--text);
 }
+
+.exercise-coach-calibration {
+  margin-bottom: 1.25rem;
+}
+
+.exercise-coach-calibration-title {
+  font-size: 1.05rem;
+  margin: 0 0 0.35rem;
+}
+
+.exercise-coach-calibration-lede {
+  margin: 0 0 0.75rem;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 72ch;
+}
+
+.exercise-coach-calibration-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.exercise-coach-calibration-waiting {
+  margin: 0.65rem 0 0;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+
+.exercise-coach-calibration-msg {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.exercise-coach-rom-badge {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  font-family: var(--mono);
+  color: var(--muted);
+}
