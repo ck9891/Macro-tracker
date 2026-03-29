@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Ingredient, Recipe, RecipeInput } from "./types.js";
+import type { Ingredient, Recipe, RecipeInput, WeightEntry } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.DATABASE_PATH ?? path.join(__dirname, "..", "data", "app.db");
@@ -32,6 +32,13 @@ export function openDb() {
       servings_multiplier REAL NOT NULL DEFAULT 1,
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS weight_entries (
+      id TEXT PRIMARY KEY,
+      measured_at TEXT NOT NULL,
+      weight REAL NOT NULL,
+      unit TEXT NOT NULL,
+      note TEXT
+    );
   `);
   return db;
 }
@@ -59,6 +66,22 @@ export function rowToRecipe(row: {
     fatG: row.fat_g,
     ingredients: JSON.parse(row.ingredients_json) as Ingredient[],
     steps: JSON.parse(row.steps_json) as string[],
+  };
+}
+
+export function rowToWeightEntry(row: {
+  id: string;
+  measured_at: string;
+  weight: number;
+  unit: string;
+  note: string | null;
+}): WeightEntry {
+  return {
+    id: row.id,
+    measuredAt: row.measured_at,
+    weight: row.weight,
+    unit: row.unit as WeightEntry["unit"],
+    ...(row.note != null && row.note !== "" ? { note: row.note } : {}),
   };
 }
 

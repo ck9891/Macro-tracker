@@ -1,8 +1,9 @@
-import type { PlannedMeal, Recipe } from "../types.js";
+import type { PlannedMeal, Recipe, WeightEntry } from "../types.js";
 
 export type SyncPack = {
   recipes: Recipe[];
   plan: PlannedMeal[];
+  weightEntries: WeightEntry[];
   serverTime: string;
 };
 
@@ -49,4 +50,14 @@ export const rawApi = {
     fetch(`/api/plan/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => json<void>(r)),
 
   clearPlan: () => fetch("/api/plan", { method: "DELETE" }).then((r) => json<void>(r)),
+
+  putWeightEntry: (id: string, body: Omit<WeightEntry, "id">) =>
+    fetch(`/api/weight/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then((r) => json<WeightEntry>(r)),
+
+  deleteWeightEntry: (id: string) =>
+    fetch(`/api/weight/${encodeURIComponent(id)}`, { method: "DELETE" }).then((r) => json<void>(r)),
 };

@@ -38,6 +38,15 @@ export function HomePage() {
           </div>
         </section>
         <section className="card">
+          <h2>Weight</h2>
+          <p className="muted">Log measurements with a time and optional note; synced like the rest of your data.</p>
+          <div className="button-row">
+            <Link to="/weight" className="btn btn-primary">
+              Track weight
+            </Link>
+          </div>
+        </section>
+        <section className="card">
           <h2>Photo import</h2>
           <p className="muted">Optional OCR in the browser to draft ingredients and steps from a picture.</p>
           <div className="button-row">
