@@ -1,7 +1,7 @@
-import type { PlannedMeal, ProgressDay, Recipe } from "../types.js";
+import type { PlannedMeal, ProgressDay, Recipe, WeightEntry } from "../types.js";
 
 const DB_NAME = "macro-tracker-v1";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export type OutboxOp =
   | { kind: "recipe.put"; id: string; body: Omit<Recipe, "id"> }
@@ -11,7 +11,9 @@ export type OutboxOp =
   | { kind: "plan.delete"; id: string }
   | { kind: "plan.clear" }
   | { kind: "progress.put"; day: string; body: Omit<ProgressDay, "day"> }
-  | { kind: "progress.delete"; day: string };
+  | { kind: "progress.delete"; day: string }
+  | { kind: "weight.put"; id: string; body: Omit<WeightEntry, "id"> }
+  | { kind: "weight.delete"; id: string };
 
 export type OutboxEntry = {
   id: string;
@@ -27,13 +29,21 @@ function openDb(): Promise<IDBDatabase> {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
       req.onerror = () => reject(req.error);
       req.onsuccess = () => resolve(req.result);
-      req.onupgradeneeded = () => {
+      req.onupgradeneeded = (ev) => {
         const db = req.result;
+        if (ev.oldVersion < 2 && ev.oldVersion > 0) {
+          for (const name of Array.from(db.objectStoreNames)) {
+            db.deleteObjectStore(name);
+          }
+        }
         if (!db.objectStoreNames.contains("recipes")) {
           db.createObjectStore("recipes", { keyPath: "id" });
         }
         if (!db.objectStoreNames.contains("plan")) {
           db.createObjectStore("plan", { keyPath: "id" });
+        }
+        if (!db.objectStoreNames.contains("weight")) {
+          db.createObjectStore("weight", { keyPath: "id" });
         }
         if (!db.objectStoreNames.contains("meta")) {
           db.createObjectStore("meta");
@@ -188,6 +198,44 @@ export const localStore = {
     });
   },
 
+  async getAllWeight(): Promise<WeightEntry[]> {
+    const db = await openDb();
+    const t = db.transaction(["weight"], "readonly");
+    return reqDone(t.objectStore("weight").getAll() as IDBRequest<WeightEntry[]>);
+  },
+
+  async putWeight(entry: WeightEntry): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("weight").put(entry);
+    });
+  },
+
+  async deleteWeight(id: string): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("weight").delete(id);
+    });
+  },
+
+  async replaceWeight(entries: WeightEntry[]): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["weight"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      const st = t.objectStore("weight");
+      st.clear();
+      for (const e of entries) st.put(e);
+    });
+  },
+
   async getMeta(key: string): Promise<unknown> {
     const db = await openDb();
     const t = db.transaction(["meta"], "readonly");
@@ -201,6 +249,31 @@ export const localStore = {
       t.oncomplete = () => resolve();
       t.onerror = () => reject(t.error);
       t.objectStore("meta").put(value, key);
+    });
+  },
+
+  async deleteMeta(key: string): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["meta"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("meta").delete(key);
+    });
+  },
+
+  async clearAllUserData(): Promise<void> {
+    const db = await openDb();
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(["recipes", "plan", "weight", "progress", "meta", "outbox"], "readwrite");
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+      t.objectStore("recipes").clear();
+      t.objectStore("plan").clear();
+      t.objectStore("weight").clear();
+      t.objectStore("progress").clear();
+      t.objectStore("meta").clear();
+      t.objectStore("outbox").clear();
     });
   },
 

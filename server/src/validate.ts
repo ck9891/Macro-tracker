@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import type { PlannedMealInput, ProgressDayInput, RecipeInput } from "./types.js";
+import type { PlannedMealInput, ProgressDayInput, RecipeInput, WeightEntryInput } from "./types.js";
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -75,6 +75,41 @@ export function validateProgressInput(
   if (body.weightKg != null) {
     if (typeof body.weightKg !== "number" || body.weightKg <= 0 || !Number.isFinite(body.weightKg)) {
       res.status(400).json({ error: "weightKg must be a positive number when set" });
+      return false;
+    }
+  }
+  return true;
+}
+
+function isValidMeasuredAt(s: string): boolean {
+  if (!s || typeof s !== "string") return false;
+  const t = Date.parse(s);
+  return Number.isFinite(t);
+}
+
+export function validateWeightEntryInput(
+  body: WeightEntryInput,
+  res: Response,
+): body is WeightEntryInput {
+  if (!isValidMeasuredAt(body.measuredAt)) {
+    res.status(400).json({ error: "measuredAt must be a valid date/time string" });
+    return false;
+  }
+  if (typeof body.weight !== "number" || body.weight <= 0 || !Number.isFinite(body.weight)) {
+    res.status(400).json({ error: "weight must be a positive number" });
+    return false;
+  }
+  if (body.unit !== "kg" && body.unit !== "lb") {
+    res.status(400).json({ error: 'unit must be "kg" or "lb"' });
+    return false;
+  }
+  if (body.note !== undefined && body.note !== null) {
+    if (typeof body.note !== "string") {
+      res.status(400).json({ error: "note must be a string" });
+      return false;
+    }
+    if (body.note.length > 2000) {
+      res.status(400).json({ error: "note is too long" });
       return false;
     }
   }

@@ -38,14 +38,25 @@ export type GroceryResponse = {
   macroTotals: { calories: number; proteinG: number; carbsG: number; fatG: number };
 };
 
-/** YYYY-MM-DD; values are what you actually ate / weighed that calendar day. */
+/** YYYY-MM-DD; logged macros for that calendar day. */
 export type ProgressDay = {
   day: string;
   calories: number;
   proteinG: number;
   carbsG: number;
   fatG: number;
+  /** Optional same-day weight snapshot (legacy); prefer `/weight` for measurements. */
   weightKg: number | null;
 };
 
 export type ProgressDayInput = Omit<ProgressDay, "day">;
+
+export type WeightUnit = "kg" | "lb";
+
+export type WeightEntry = {
+  id: string;
+  measuredAt: string;
+  weight: number;
+  unit: WeightUnit;
+  note?: string;
+};

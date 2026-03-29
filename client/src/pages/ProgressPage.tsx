@@ -1,7 +1,8 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { api, type ProgressDay } from "../api.js";
+import { Link } from "react-router-dom";
+import { api, type ProgressDay, type WeightEntry, type WeightUnit } from "../api.js";
 import { SparkLineChart } from "../components/SparkLineChart.js";
-import { WeightLineChart } from "../components/WeightLineChart.js";
+import { WeightLineChart, type WeightChartPoint } from "../components/WeightLineChart.js";
 import { useMacroSync } from "../hooks/useMacroSync.js";
 import { localDayString } from "../lib/localDate.js";
 
@@ -14,13 +15,31 @@ function startDayForRange(days: number): string {
   return localDayString(d);
 }
 
-function filterByRange(rows: ProgressDay[], rangeDays: number): ProgressDay[] {
+function filterProgressByRange(rows: ProgressDay[], rangeDays: number): ProgressDay[] {
   const start = startDayForRange(rangeDays);
   return rows.filter((r) => r.day >= start);
 }
 
+function toKg(weight: number, unit: WeightUnit): number {
+  return unit === "kg" ? weight : weight * 0.45359237;
+}
+
+function rangeStartMs(rangeDays: number): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - rangeDays);
+  return d.getTime();
+}
+
+function rangeEndMs(): number {
+  const d = new Date();
+  d.setHours(23, 59, 59, 999);
+  return d.getTime();
+}
+
 export function ProgressPage() {
   const [rows, setRows] = useState<ProgressDay[]>([]);
+  const [weightEntries, setWeightEntries] = useState<WeightEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [rangeDays, setRangeDays] = useState<(typeof RANGE_OPTIONS)[number]>(30);
   const [formDay, setFormDay] = useState(() => localDayString());
@@ -28,15 +47,15 @@ export function ProgressPage() {
   const [proteinG, setProteinG] = useState("");
   const [carbsG, setCarbsG] = useState("");
   const [fatG, setFatG] = useState("");
-  const [weightKg, setWeightKg] = useState("");
-  const [clearWeight, setClearWeight] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
-    api
-      .listProgress()
-      .then((r) => setRows(r))
+    Promise.all([api.listProgress(), api.listWeightEntries()])
+      .then(([p, w]) => {
+        setRows(p);
+        setWeightEntries(w);
+      })
       .catch((e: Error) => setError(e.message));
   }, []);
 
@@ -46,7 +65,19 @@ export function ProgressPage() {
 
   useMacroSync(load);
 
-  const inRange = useMemo(() => filterByRange(rows, rangeDays), [rows, rangeDays]);
+  const inRange = useMemo(() => filterProgressByRange(rows, rangeDays), [rows, rangeDays]);
+
+  const weightPointsInRange = useMemo((): WeightChartPoint[] => {
+    const startMs = rangeStartMs(rangeDays);
+    const endMs = rangeEndMs();
+    return weightEntries
+      .map((e) => {
+        const t = Date.parse(e.measuredAt);
+        if (!Number.isFinite(t) || t < startMs || t > endMs) return null;
+        return { measuredAt: e.measuredAt, weightKg: toKg(e.weight, e.unit) };
+      })
+      .filter((p): p is WeightChartPoint => p != null);
+  }, [weightEntries, rangeDays]);
 
   const chartData = useMemo(() => {
     const labels = inRange.map((r) => r.day);
@@ -56,7 +87,6 @@ export function ProgressPage() {
       proteinG: inRange.map((r) => r.proteinG),
       carbsG: inRange.map((r) => r.carbsG),
       fatG: inRange.map((r) => r.fatG),
-      weightKg: inRange.map((r) => r.weightKg),
     };
   }, [inRange]);
 
@@ -67,15 +97,11 @@ export function ProgressPage() {
       setProteinG(String(existing.proteinG));
       setCarbsG(String(existing.carbsG));
       setFatG(String(existing.fatG));
-      setWeightKg(existing.weightKg != null ? String(existing.weightKg) : "");
-      setClearWeight(false);
     } else {
       setCalories("");
       setProteinG("");
       setCarbsG("");
       setFatG("");
-      setWeightKg("");
-      setClearWeight(false);
     }
   }, [formDay, rows]);
 
@@ -90,19 +116,6 @@ export function ProgressPage() {
       return;
     }
     const existing = rows.find((r) => r.day === formDay);
-    let w: number | null = null;
-    if (clearWeight) {
-      w = null;
-    } else if (weightKg.trim() !== "") {
-      const parsed = Number(weightKg);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        setError("Weight must be a positive number, or leave blank to keep a previous value.");
-        return;
-      }
-      w = parsed;
-    } else if (existing?.weightKg != null) {
-      w = existing.weightKg;
-    }
     setSaving(true);
     setError(null);
     try {
@@ -111,7 +124,7 @@ export function ProgressPage() {
         proteinG: p,
         carbsG: carb,
         fatG: f,
-        weightKg: w,
+        weightKg: existing?.weightKg ?? null,
       });
       await load();
     } catch (err) {
@@ -143,8 +156,9 @@ export function ProgressPage() {
     <>
       <h1 className="page-title">Progress</h1>
       <p className="page-lede">
-        Log what you ate and your weight by calendar day. Charts summarize the last few weeks; values are
-        independent of the meal plan (plan totals are a separate estimate).
+        Log macros by calendar day. The weight chart uses entries from the{" "}
+        <Link to="/weight">Weight</Link> page (converted to kg for the chart). Meal-plan totals stay a
+        separate estimate.
       </p>
 
       {error ? <div className="error-banner">{error}</div> : null}
@@ -195,10 +209,12 @@ export function ProgressPage() {
       <section className="card" style={{ marginBottom: "1.5rem" }}>
         <h2>Weight</h2>
         <WeightLineChart
-          labels={chartData.labels}
-          weightsKg={chartData.weightKg}
-          ariaLabel={`Body weight in kilograms when logged, last ${rangeDays} days`}
+          points={weightPointsInRange}
+          ariaLabel={`Body weight in kilograms from logged entries, last ${rangeDays} days`}
         />
+        <p className="subtle" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+          <Link to="/weight">Add or edit weight entries</Link>
+        </p>
       </section>
 
       <section className="card">
@@ -264,26 +280,6 @@ export function ProgressPage() {
               />
             </div>
           </div>
-          <div className="field">
-            <label htmlFor="prog-w">Weight (kg), optional</label>
-            <input
-              id="prog-w"
-              type="number"
-              min={0}
-              step={0.1}
-              value={weightKg}
-              onChange={(e) => setWeightKg(e.target.value)}
-              disabled={clearWeight}
-            />
-          </div>
-          <label className="subtle" style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <input
-              type="checkbox"
-              checked={clearWeight}
-              onChange={(e) => setClearWeight(e.target.checked)}
-            />
-            Clear weight for this day
-          </label>
           <div className="button-row" style={{ marginTop: "1rem" }}>
             <button type="submit" className="btn btn-primary" disabled={saving}>
               {saving ? "Saving…" : "Save day"}

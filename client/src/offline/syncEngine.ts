@@ -1,5 +1,5 @@
 import { computeGroceryFromLocal } from "../lib/grocery.js";
-import type { PlannedMeal, ProgressDay, Recipe } from "../types.js";
+import type { PlannedMeal, ProgressDay, Recipe, WeightEntry } from "../types.js";
 import { localStore, type OutboxEntry } from "./localStore.js";
 import { rawApi } from "./rawApi.js";
 
@@ -49,6 +49,14 @@ async function applyOpToLocal(op: OutboxEntry["op"]): Promise<void> {
     case "progress.delete":
       await localStore.deleteProgress(op.day);
       break;
+    case "weight.put": {
+      const entry: WeightEntry = { id: op.id, ...op.body };
+      await localStore.putWeight(entry);
+      break;
+    }
+    case "weight.delete":
+      await localStore.deleteWeight(op.id);
+      break;
     default:
       break;
   }
@@ -81,6 +89,12 @@ async function sendOp(entry: OutboxEntry): Promise<void> {
     case "progress.delete":
       await rawApi.deleteProgress(op.day);
       break;
+    case "weight.put":
+      await rawApi.putWeightEntry(op.id, op.body);
+      break;
+    case "weight.delete":
+      await rawApi.deleteWeightEntry(op.id);
+      break;
     default:
       break;
   }
@@ -95,6 +109,7 @@ export const syncEngine = {
     const pack = await rawApi.getSyncPack();
     await localStore.replaceRecipes(pack.recipes);
     await localStore.replacePlan(pack.plan);
+    await localStore.replaceWeight(pack.weightEntries ?? []);
     await localStore.replaceProgress(pack.progress ?? []);
     await localStore.setMeta(LAST_SYNC_KEY, pack.serverTime);
 

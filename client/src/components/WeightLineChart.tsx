@@ -1,44 +1,53 @@
 import { pathFromPoints } from "./SparkLineChart.js";
 
+export type WeightChartPoint = {
+  measuredAt: string;
+  weightKg: number;
+};
+
+function formatAxisLabel(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return iso;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export function WeightLineChart(props: {
   width?: number;
   height?: number;
-  labels: string[];
-  weightsKg: (number | null)[];
+  points: WeightChartPoint[];
   ariaLabel: string;
 }) {
   const width = props.width ?? 640;
   const height = props.height ?? 160;
-  const { labels, weightsKg } = props;
+  const ptsSorted = [...props.points].sort(
+    (a, b) => Date.parse(a.measuredAt) - Date.parse(b.measuredAt),
+  );
 
-  const pairs = labels
-    .map((day, i) => ({ day, w: weightsKg[i] }))
-    .filter((p): p is { day: string; w: number } => p.w != null && Number.isFinite(p.w));
-
-  if (pairs.length < 2) {
+  if (ptsSorted.length < 2) {
     return (
       <p className="subtle" style={{ margin: 0 }}>
-        Log weight on at least two days in this range to see a trend.
+        Log at least two weight entries in this range to see a trend. Use the Weight page to add
+        measurements.
       </p>
     );
   }
 
-  const values = pairs.map((p) => p.w);
+  const values = ptsSorted.map((p) => p.weightKg);
   const min = Math.min(...values);
   const max = Math.max(...values);
   const span = max - min || 1;
   const pad = 10;
   const innerW = width - pad * 2;
   const innerH = height - pad * 2;
-  const n = pairs.length;
+  const n = ptsSorted.length;
 
-  const pts = pairs.map((p, i) => ({
+  const pts = ptsSorted.map((p, i) => ({
     x: pad + (n === 1 ? innerW / 2 : (i / (n - 1)) * innerW),
-    y: pad + innerH - ((p.w - min) / span) * innerH,
+    y: pad + innerH - ((p.weightKg - min) / span) * innerH,
   }));
 
   const d = pathFromPoints(pts);
-  const last = pairs[pairs.length - 1].w;
+  const last = ptsSorted[ptsSorted.length - 1].weightKg;
 
   return (
     <div className="chart-wrap">
@@ -59,7 +68,7 @@ export function WeightLineChart(props: {
           vectorEffect="non-scaling-stroke"
         />
         {pts.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={3} fill="var(--accent)" />
+          <circle key={ptsSorted[i].measuredAt} cx={p.x} cy={p.y} r={3} fill="var(--accent)" />
         ))}
       </svg>
       <div className="chart-legend">
@@ -72,8 +81,8 @@ export function WeightLineChart(props: {
         </span>
       </div>
       <div className="chart-axis subtle mono" style={{ fontSize: "0.75rem", marginTop: "0.35rem" }}>
-        <span>{pairs[0].day}</span>
-        <span>{pairs[pairs.length - 1].day}</span>
+        <span>{formatAxisLabel(ptsSorted[0].measuredAt)}</span>
+        <span>{formatAxisLabel(ptsSorted[ptsSorted.length - 1].measuredAt)}</span>
       </div>
     </div>
   );

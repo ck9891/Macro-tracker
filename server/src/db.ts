@@ -2,16 +2,87 @@ import Database from "better-sqlite3";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Ingredient, Recipe, RecipeInput } from "./types.js";
+import { LEGACY_USER_ID } from "./auth.js";
+import type { Ingredient, ProgressDay, Recipe, RecipeInput, WeightEntry } from "./types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const dbPath = process.env.DATABASE_PATH ?? path.join(__dirname, "..", "data", "app.db");
+
+function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return rows.some((r) => r.name === column);
+}
+
+function migrateAuthAndUserScope(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT,
+      totp_secret TEXT,
+      totp_enabled INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      method TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    CREATE TABLE IF NOT EXISTS magic_login_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      expires_at TEXT NOT NULL,
+      used_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
+
+  if (!tableHasColumn(db, "recipes", "user_id")) {
+    db.exec("ALTER TABLE recipes ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
+  }
+  if (!tableHasColumn(db, "planned_meals", "user_id")) {
+    db.exec(
+      "ALTER TABLE planned_meals ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
+    );
+  }
+  if (!tableHasColumn(db, "weight_entries", "user_id")) {
+    db.exec(
+      "ALTER TABLE weight_entries ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
+    );
+  }
+  if (!tableHasColumn(db, "daily_progress", "user_id")) {
+    db.exec(
+      "ALTER TABLE daily_progress ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
+    );
+  }
+
+  const legacyEmail = "legacy@local";
+  const hasLegacy = db.prepare("SELECT 1 FROM users WHERE id = ?").get(LEGACY_USER_ID);
+  if (!hasLegacy) {
+    db.prepare(
+      "INSERT INTO users (id, email, password_hash, totp_enabled) VALUES (?, ?, NULL, 0)",
+    ).run(LEGACY_USER_ID, legacyEmail);
+  }
+
+  db.prepare("UPDATE recipes SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+  db.prepare("UPDATE planned_meals SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+  db.prepare("UPDATE weight_entries SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+  db.prepare("UPDATE daily_progress SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
+}
 
 export function openDb() {
   const dir = path.dirname(dbPath);
   fs.mkdirSync(dir, { recursive: true });
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
   db.exec(`
     CREATE TABLE IF NOT EXISTS recipes (
       id TEXT PRIMARY KEY,
@@ -32,6 +103,13 @@ export function openDb() {
       servings_multiplier REAL NOT NULL DEFAULT 1,
       FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS weight_entries (
+      id TEXT PRIMARY KEY,
+      measured_at TEXT NOT NULL,
+      weight REAL NOT NULL,
+      unit TEXT NOT NULL,
+      note TEXT
+    );
     CREATE TABLE IF NOT EXISTS daily_progress (
       day TEXT PRIMARY KEY,
       calories REAL NOT NULL,
@@ -42,7 +120,46 @@ export function openDb() {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+  migrateAuthAndUserScope(db);
+  migrateDailyProgressCompositePk(db);
   return db;
+}
+
+/** Rebuild daily_progress so each user has their own row per calendar day. */
+function migrateDailyProgressCompositePk(db: Database.Database) {
+  const exists = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_progress'")
+    .get();
+  if (!exists) return;
+
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_progress'").get() as
+    | { sql: string }
+    | undefined;
+  const sql = row?.sql?.toLowerCase() ?? "";
+  if (sql.includes("primary key (user_id, day)") || sql.includes("primary key(user_id,day)")) {
+    return;
+  }
+
+  db.exec(`
+    CREATE TABLE daily_progress_next (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      day TEXT NOT NULL,
+      calories REAL NOT NULL,
+      protein_g REAL NOT NULL,
+      carbs_g REAL NOT NULL,
+      fat_g REAL NOT NULL,
+      weight_kg REAL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, day)
+    );
+  `);
+  db.exec(`
+    INSERT OR REPLACE INTO daily_progress_next (user_id, day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at)
+    SELECT user_id, day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at
+    FROM daily_progress;
+  `);
+  db.exec("DROP TABLE daily_progress;");
+  db.exec("ALTER TABLE daily_progress_next RENAME TO daily_progress;");
 }
 
 export function rowToRecipe(row: {
@@ -68,6 +185,40 @@ export function rowToRecipe(row: {
     fatG: row.fat_g,
     ingredients: JSON.parse(row.ingredients_json) as Ingredient[],
     steps: JSON.parse(row.steps_json) as string[],
+  };
+}
+
+export function rowToWeightEntry(row: {
+  id: string;
+  measured_at: string;
+  weight: number;
+  unit: string;
+  note: string | null;
+}): WeightEntry {
+  return {
+    id: row.id,
+    measuredAt: row.measured_at,
+    weight: row.weight,
+    unit: row.unit as WeightEntry["unit"],
+    ...(row.note != null && row.note !== "" ? { note: row.note } : {}),
+  };
+}
+
+export function rowToProgressDay(row: {
+  day: string;
+  calories: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+  weight_kg: number | null;
+}): ProgressDay {
+  return {
+    day: row.day,
+    calories: row.calories,
+    proteinG: row.protein_g,
+    carbsG: row.carbs_g,
+    fatG: row.fat_g,
+    weightKg: row.weight_kg == null ? null : row.weight_kg,
   };
 }
 
@@ -124,14 +275,15 @@ export function seedIfEmpty(db: Database.Database) {
   ];
 
   const insert = db.prepare(`
-    INSERT INTO recipes (id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
-    VALUES (@id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
+    INSERT INTO recipes (id, user_id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
+    VALUES (@id, @user_id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
   `);
 
   for (const r of samples) {
     const id = crypto.randomUUID();
     insert.run({
       id,
+      user_id: LEGACY_USER_ID,
       name: r.name,
       duration_minutes: r.durationMinutes,
       servings: r.servings,

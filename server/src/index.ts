@@ -3,6 +3,7 @@ import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { registerAuthEndpoints } from "./auth.js";
 import { openDb, seedIfEmpty } from "./db.js";
 import { registerRoutes } from "./routes.js";
 
@@ -16,6 +17,7 @@ app.use(express.json({ limit: "2mb" }));
 
 const db = openDb();
 seedIfEmpty(db);
+registerAuthEndpoints(app, db);
 registerRoutes(app, db);
 
 if (fs.existsSync(clientDist)) {
