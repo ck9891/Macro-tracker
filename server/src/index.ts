@@ -12,6 +12,8 @@ const port = Number(process.env.PORT ?? 3001);
 const clientDist = path.join(__dirname, "../../client/dist");
 
 const app = express();
+// So req.secure and cookies honor X-Forwarded-Proto when behind TLS-terminating proxies.
+app.set("trust proxy", 1);
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
 

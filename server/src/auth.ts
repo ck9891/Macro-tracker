@@ -70,6 +70,12 @@ function totpValid(secret: string, token: string): boolean {
   return verifySync({ secret, token, epochTolerance: 30 }).valid;
 }
 
+/** Use Secure cookies only on HTTPS (or when a trusted proxy says the client used HTTPS). */
+function sessionCookieSecure(req: Request): boolean {
+  if (process.env.SESSION_COOKIE_INSECURE === "1") return false;
+  return Boolean(req.secure);
+}
+
 export function registerAuthEndpoints(app: import("express").Express, db: Database.Database) {
   app.post("/api/auth/register", (req, res) => {
     const body = req.body as { email?: string; password?: string };
@@ -106,7 +112,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     res.cookie(SESSION_COOKIE, `${sessionId}.${token}`, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: sessionCookieSecure(req),
       maxAge: SESSION_DAYS_PASSWORD * 24 * 60 * 60 * 1000,
       path: "/",
     });
@@ -155,7 +161,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     res.cookie(SESSION_COOKIE, `${sessionId}.${token}`, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: sessionCookieSecure(req),
       maxAge: SESSION_DAYS_PASSWORD * 24 * 60 * 60 * 1000,
       path: "/",
     });
@@ -179,7 +185,12 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
         db.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
       }
     }
-    res.clearCookie(SESSION_COOKIE, { path: "/" });
+    res.clearCookie(SESSION_COOKIE, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: sessionCookieSecure(req),
+    });
     res.status(204).send();
   });
 
@@ -267,7 +278,7 @@ export function registerAuthEndpoints(app: import("express").Express, db: Databa
     res.cookie(SESSION_COOKIE, `${sessionId}.${sessionToken}`, {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      secure: sessionCookieSecure(req),
       maxAge: SESSION_DAYS_MAGIC * 24 * 60 * 60 * 1000,
       path: "/",
     });
