@@ -81,7 +81,155 @@ function migrateAuthAndUserScope(db: Database.Database) {
   db.prepare("UPDATE daily_progress SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
 }
 
-const TEST_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002";
+export const TEST_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002";
+
+/** Sample recipes for empty DBs and dev accounts (meal plan + grocery merge testing). */
+export const SAMPLE_RECIPES: RecipeInput[] = [
+  {
+    name: "Greek yogurt bowl",
+    durationMinutes: 5,
+    servings: 1,
+    calories: 320,
+    proteinG: 28,
+    carbsG: 32,
+    fatG: 8,
+    ingredients: [
+      { name: "Greek yogurt", amount: 200, unit: "g" },
+      { name: "Blueberries", amount: 80, unit: "g" },
+      { name: "Honey", amount: 1, unit: "tbsp" },
+      { name: "Granola", amount: 30, unit: "g" },
+    ],
+    steps: [
+      "Add yogurt to a bowl.",
+      "Top with blueberries and granola.",
+      "Drizzle honey and serve.",
+    ],
+  },
+  {
+    name: "Chicken stir-fry",
+    durationMinutes: 35,
+    servings: 4,
+    calories: 420,
+    proteinG: 38,
+    carbsG: 28,
+    fatG: 16,
+    ingredients: [
+      { name: "Chicken breast", amount: 600, unit: "g" },
+      { name: "Bell pepper", amount: 2, unit: "whole" },
+      { name: "Broccoli", amount: 300, unit: "g" },
+      { name: "Soy sauce", amount: 3, unit: "tbsp" },
+      { name: "Garlic", amount: 3, unit: "cloves" },
+      { name: "Olive oil", amount: 2, unit: "tbsp" },
+      { name: "Jasmine rice", amount: 2, unit: "cups" },
+    ],
+    steps: [
+      "Cook rice according to package directions.",
+      "Slice chicken and vegetables.",
+      "Stir-fry chicken in oil until cooked through.",
+      "Add vegetables, garlic, and soy sauce; cook until tender.",
+      "Serve over rice.",
+    ],
+  },
+  {
+    name: "Overnight oats",
+    durationMinutes: 10,
+    servings: 2,
+    calories: 380,
+    proteinG: 14,
+    carbsG: 58,
+    fatG: 10,
+    ingredients: [
+      { name: "Rolled oats", amount: 120, unit: "g" },
+      { name: "Milk", amount: 400, unit: "ml" },
+      { name: "Banana", amount: 1, unit: "whole" },
+      { name: "Honey", amount: 2, unit: "tbsp" },
+      { name: "Chia seeds", amount: 1, unit: "tbsp" },
+    ],
+    steps: [
+      "Mix oats, milk, chia, and honey in a jar.",
+      "Refrigerate overnight.",
+      "Top with sliced banana before serving.",
+    ],
+  },
+  {
+    name: "Pasta marinara",
+    durationMinutes: 25,
+    servings: 4,
+    calories: 480,
+    proteinG: 16,
+    carbsG: 72,
+    fatG: 14,
+    ingredients: [
+      { name: "Spaghetti", amount: 400, unit: "g" },
+      { name: "Canned tomatoes", amount: 800, unit: "g" },
+      { name: "Garlic", amount: 4, unit: "cloves" },
+      { name: "Olive oil", amount: 3, unit: "tbsp" },
+      { name: "Fresh basil", amount: 12, unit: "g" },
+    ],
+    steps: [
+      "Sauté garlic in olive oil until fragrant.",
+      "Add tomatoes; simmer 15 minutes.",
+      "Cook pasta; toss with sauce and basil.",
+    ],
+  },
+  {
+    name: "Simple green salad",
+    durationMinutes: 10,
+    servings: 2,
+    calories: 180,
+    proteinG: 4,
+    carbsG: 12,
+    fatG: 14,
+    ingredients: [
+      { name: "Mixed greens", amount: 120, unit: "g" },
+      { name: "Cucumber", amount: 0.5, unit: "whole" },
+      { name: "Olive oil", amount: 2, unit: "tbsp" },
+      { name: "Lemon juice", amount: 1, unit: "tbsp" },
+    ],
+    steps: ["Whisk lemon juice and olive oil for dressing.", "Toss greens and cucumber; dress and serve."],
+  },
+];
+
+function insertRecipesForUser(db: Database.Database, userId: string, recipes: RecipeInput[]) {
+  const insert = db.prepare(`
+    INSERT INTO recipes (id, user_id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
+    VALUES (@id, @user_id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
+  `);
+  for (const r of recipes) {
+    insert.run({
+      id: crypto.randomUUID(),
+      user_id: userId,
+      name: r.name,
+      duration_minutes: r.durationMinutes,
+      servings: r.servings,
+      calories: r.calories,
+      protein_g: r.proteinG,
+      carbs_g: r.carbsG,
+      fat_g: r.fatG,
+      ingredients_json: JSON.stringify(r.ingredients),
+      steps_json: JSON.stringify(r.steps),
+    });
+  }
+}
+
+/**
+ * Ensures legacy and test-admin accounts have demo recipes when they have none,
+ * so meal plan and grocery features are testable after login.
+ */
+export function seedDemoRecipesForDevAccounts(db: Database.Database) {
+  const allow =
+    process.env.NODE_ENV !== "production" || process.env.ENABLE_TEST_ADMIN === "1";
+  const targets = [LEGACY_USER_ID];
+  if (allow) targets.push(TEST_ADMIN_USER_ID);
+
+  for (const uid of targets) {
+    const exists = db.prepare("SELECT 1 FROM users WHERE id = ?").get(uid);
+    if (!exists) continue;
+    const c = db.prepare("SELECT COUNT(*) as c FROM recipes WHERE user_id = ?").get(uid) as { c: number };
+    if (c.c > 0) continue;
+    insertRecipesForUser(db, uid, SAMPLE_RECIPES);
+  }
+}
 
 /** Dev (or ENABLE_TEST_ADMIN=1) seeded account with is_admin; credentials from env or defaults. */
 export function seedTestAdmin(db: Database.Database) {
@@ -254,77 +402,9 @@ export function rowToProgressDay(row: {
   };
 }
 
+/** When the DB has no recipes at all, seed the legacy user (first-run / migration). */
 export function seedIfEmpty(db: Database.Database) {
   const count = db.prepare("SELECT COUNT(*) as c FROM recipes").get() as { c: number };
   if (count.c > 0) return;
-
-  const samples: RecipeInput[] = [
-    {
-      name: "Greek yogurt bowl",
-      durationMinutes: 5,
-      servings: 1,
-      calories: 320,
-      proteinG: 28,
-      carbsG: 32,
-      fatG: 8,
-      ingredients: [
-        { name: "Greek yogurt", amount: 200, unit: "g" },
-        { name: "Blueberries", amount: 80, unit: "g" },
-        { name: "Honey", amount: 1, unit: "tbsp" },
-        { name: "Granola", amount: 30, unit: "g" },
-      ],
-      steps: [
-        "Add yogurt to a bowl.",
-        "Top with blueberries and granola.",
-        "Drizzle honey and serve.",
-      ],
-    },
-    {
-      name: "Chicken stir-fry",
-      durationMinutes: 35,
-      servings: 4,
-      calories: 420,
-      proteinG: 38,
-      carbsG: 28,
-      fatG: 16,
-      ingredients: [
-        { name: "Chicken breast", amount: 600, unit: "g" },
-        { name: "Bell pepper", amount: 2, unit: "whole" },
-        { name: "Broccoli", amount: 300, unit: "g" },
-        { name: "Soy sauce", amount: 3, unit: "tbsp" },
-        { name: "Garlic", amount: 3, unit: "cloves" },
-        { name: "Olive oil", amount: 2, unit: "tbsp" },
-        { name: "Jasmine rice", amount: 2, unit: "cups" },
-      ],
-      steps: [
-        "Cook rice according to package directions.",
-        "Slice chicken and vegetables.",
-        "Stir-fry chicken in oil until cooked through.",
-        "Add vegetables, garlic, and soy sauce; cook until tender.",
-        "Serve over rice.",
-      ],
-    },
-  ];
-
-  const insert = db.prepare(`
-    INSERT INTO recipes (id, user_id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
-    VALUES (@id, @user_id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
-  `);
-
-  for (const r of samples) {
-    const id = crypto.randomUUID();
-    insert.run({
-      id,
-      user_id: LEGACY_USER_ID,
-      name: r.name,
-      duration_minutes: r.durationMinutes,
-      servings: r.servings,
-      calories: r.calories,
-      protein_g: r.proteinG,
-      carbs_g: r.carbsG,
-      fat_g: r.fatG,
-      ingredients_json: JSON.stringify(r.ingredients),
-      steps_json: JSON.stringify(r.steps),
-    });
-  }
+  insertRecipesForUser(db, LEGACY_USER_ID, SAMPLE_RECIPES);
 }

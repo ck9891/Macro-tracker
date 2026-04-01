@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerAuthEndpoints } from "./auth.js";
-import { openDb, seedIfEmpty } from "./db.js";
+import { openDb, seedDemoRecipesForDevAccounts, seedIfEmpty } from "./db.js";
 import { registerRoutes } from "./routes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,7 @@ app.use(express.json({ limit: "2mb" }));
 
 const db = openDb();
 seedIfEmpty(db);
+seedDemoRecipesForDevAccounts(db);
 registerAuthEndpoints(app, db);
 registerRoutes(app, db);
 
