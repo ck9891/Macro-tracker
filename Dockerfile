@@ -14,26 +14,24 @@ COPY tsconfig.base.json ./
 
 RUN npm run build
 
-# Runtime: Express + SQLite native module
+# Runtime: Express + Prisma + PostgreSQL
 FROM node:22-bookworm-slim AS runner
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ libc6-dev \
-  && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY server/package.json server/
+COPY server/prisma server/prisma
+
 RUN cd server && npm install --omit=dev
+
+ENV DATABASE_URL=postgresql://postgres:postgres@localhost:5432/macro
+RUN cd server && npx prisma generate
 
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
 ENV NODE_ENV=production
 ENV PORT=3001
-ENV DATABASE_PATH=/data/app.db
 
 EXPOSE 3001
 
-VOLUME ["/data"]
-
-CMD ["node", "server/dist/index.js"]
+CMD ["sh", "-c", "cd server && npx prisma migrate deploy && node dist/index.js"]

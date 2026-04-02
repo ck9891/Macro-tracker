@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerAuthEndpoints } from "./auth.js";
-import { openDb, seedDemoRecipesForDevAccounts, seedIfEmpty } from "./db.js";
+import { connectDb, prisma, seedDemoRecipesForDevAccounts, seedIfEmpty } from "./db.js";
 import { registerRoutes } from "./routes.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -17,11 +17,8 @@ app.set("trust proxy", 1);
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
 
-const db = openDb();
-seedIfEmpty(db);
-seedDemoRecipesForDevAccounts(db);
-registerAuthEndpoints(app, db);
-registerRoutes(app, db);
+registerAuthEndpoints(app, prisma);
+registerRoutes(app, prisma);
 
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
@@ -31,6 +28,17 @@ if (fs.existsSync(clientDist)) {
   });
 }
 
-app.listen(port, () => {
-  console.log(`Server listening on http://localhost:${port}`);
+async function main() {
+  await connectDb();
+  await seedIfEmpty();
+  await seedDemoRecipesForDevAccounts();
+
+  app.listen(port, () => {
+    console.log(`Server listening on http://localhost:${port}`);
+  });
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
 });

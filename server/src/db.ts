@@ -1,87 +1,22 @@
-import Database from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { hashPassword, LEGACY_USER_ID } from "./auth.js";
+import { PrismaClient } from "@prisma/client";
+import { LEGACY_USER_ID } from "./constants.js";
+import { hashPassword } from "./password.js";
 import type { Ingredient, ProgressDay, Recipe, RecipeInput, WeightEntry } from "./types.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = process.env.DATABASE_PATH ?? path.join(__dirname, "..", "data", "app.db");
-
-function tableHasColumn(db: Database.Database, table: string, column: string): boolean {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  return rows.some((r) => r.name === column);
-}
-
-function migrateAuthAndUserScope(db: Database.Database) {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      password_hash TEXT,
-      totp_secret TEXT,
-      totp_enabled INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      method TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
-    CREATE TABLE IF NOT EXISTS magic_login_tokens (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      token_hash TEXT NOT NULL UNIQUE,
-      expires_at TEXT NOT NULL,
-      used_at TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now')),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
-
-  if (!tableHasColumn(db, "users", "is_admin")) {
-    db.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
-  }
-
-  if (!tableHasColumn(db, "recipes", "user_id")) {
-    db.exec("ALTER TABLE recipes ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE");
-  }
-  if (!tableHasColumn(db, "planned_meals", "user_id")) {
-    db.exec(
-      "ALTER TABLE planned_meals ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
-    );
-  }
-  if (!tableHasColumn(db, "weight_entries", "user_id")) {
-    db.exec(
-      "ALTER TABLE weight_entries ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
-    );
-  }
-  if (!tableHasColumn(db, "daily_progress", "user_id")) {
-    db.exec(
-      "ALTER TABLE daily_progress ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE CASCADE",
-    );
-  }
-
-  const legacyEmail = "legacy@local";
-  const hasLegacy = db.prepare("SELECT 1 FROM users WHERE id = ?").get(LEGACY_USER_ID);
-  if (!hasLegacy) {
-    db.prepare(
-      "INSERT INTO users (id, email, password_hash, totp_enabled) VALUES (?, ?, NULL, 0)",
-    ).run(LEGACY_USER_ID, legacyEmail);
-  }
-
-  db.prepare("UPDATE recipes SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
-  db.prepare("UPDATE planned_meals SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
-  db.prepare("UPDATE weight_entries SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
-  db.prepare("UPDATE daily_progress SET user_id = ? WHERE user_id IS NULL").run(LEGACY_USER_ID);
-}
-
 export const TEST_ADMIN_USER_ID = "00000000-0000-0000-0000-000000000002";
+
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
+
+function makeClient(): PrismaClient {
+  return new PrismaClient({
+    log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  });
+}
+
+export const prisma = globalForPrisma.prisma ?? makeClient();
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
 
 /** Sample recipes for empty DBs and dev accounts (meal plan + grocery merge testing). */
 export const SAMPLE_RECIPES: RecipeInput[] = [
@@ -190,24 +125,22 @@ export const SAMPLE_RECIPES: RecipeInput[] = [
   },
 ];
 
-function insertRecipesForUser(db: Database.Database, userId: string, recipes: RecipeInput[]) {
-  const insert = db.prepare(`
-    INSERT INTO recipes (id, user_id, name, duration_minutes, servings, calories, protein_g, carbs_g, fat_g, ingredients_json, steps_json)
-    VALUES (@id, @user_id, @name, @duration_minutes, @servings, @calories, @protein_g, @carbs_g, @fat_g, @ingredients_json, @steps_json)
-  `);
+async function insertRecipesForUser(userId: string, recipes: RecipeInput[]) {
   for (const r of recipes) {
-    insert.run({
-      id: crypto.randomUUID(),
-      user_id: userId,
-      name: r.name,
-      duration_minutes: r.durationMinutes,
-      servings: r.servings,
-      calories: r.calories,
-      protein_g: r.proteinG,
-      carbs_g: r.carbsG,
-      fat_g: r.fatG,
-      ingredients_json: JSON.stringify(r.ingredients),
-      steps_json: JSON.stringify(r.steps),
+    await prisma.recipe.create({
+      data: {
+        id: crypto.randomUUID(),
+        userId,
+        name: r.name,
+        durationMinutes: Math.round(r.durationMinutes),
+        servings: r.servings,
+        calories: r.calories,
+        proteinG: r.proteinG,
+        carbsG: r.carbsG,
+        fatG: r.fatG,
+        ingredientsJson: JSON.stringify(r.ingredients),
+        stepsJson: JSON.stringify(r.steps),
+      },
     });
   }
 }
@@ -216,23 +149,23 @@ function insertRecipesForUser(db: Database.Database, userId: string, recipes: Re
  * Ensures legacy and test-admin accounts have demo recipes when they have none,
  * so meal plan and grocery features are testable after login.
  */
-export function seedDemoRecipesForDevAccounts(db: Database.Database) {
+export async function seedDemoRecipesForDevAccounts() {
   const allow =
     process.env.NODE_ENV !== "production" || process.env.ENABLE_TEST_ADMIN === "1";
   const targets = [LEGACY_USER_ID];
   if (allow) targets.push(TEST_ADMIN_USER_ID);
 
   for (const uid of targets) {
-    const exists = db.prepare("SELECT 1 FROM users WHERE id = ?").get(uid);
-    if (!exists) continue;
-    const c = db.prepare("SELECT COUNT(*) as c FROM recipes WHERE user_id = ?").get(uid) as { c: number };
-    if (c.c > 0) continue;
-    insertRecipesForUser(db, uid, SAMPLE_RECIPES);
+    const user = await prisma.user.findUnique({ where: { id: uid } });
+    if (!user) continue;
+    const c = await prisma.recipe.count({ where: { userId: uid } });
+    if (c > 0) continue;
+    await insertRecipesForUser(uid, SAMPLE_RECIPES);
   }
 }
 
 /** Dev (or ENABLE_TEST_ADMIN=1) seeded account with is_admin; credentials from env or defaults. */
-export function seedTestAdmin(db: Database.Database) {
+export async function seedTestAdmin() {
   const allow =
     process.env.NODE_ENV !== "production" || process.env.ENABLE_TEST_ADMIN === "1";
   if (!allow) return;
@@ -241,143 +174,87 @@ export function seedTestAdmin(db: Database.Database) {
   const password = process.env.TEST_ADMIN_PASSWORD ?? "TestAdmin123!";
   const passwordHash = hashPassword(password);
 
-  const existing = db.prepare("SELECT id FROM users WHERE email = ? COLLATE NOCASE").get(email) as
-    | { id: string }
-    | undefined;
+  const existing = await prisma.user.findUnique({ where: { email } });
   if (existing) {
-    db.prepare(
-      "UPDATE users SET password_hash = ?, totp_enabled = 0, totp_secret = NULL, is_admin = 1 WHERE id = ?",
-    ).run(passwordHash, existing.id);
+    await prisma.user.update({
+      where: { id: existing.id },
+      data: {
+        passwordHash,
+        totpEnabled: false,
+        totpSecret: null,
+        isAdmin: true,
+      },
+    });
     return;
   }
 
-  db.prepare(
-    "INSERT INTO users (id, email, password_hash, totp_enabled, is_admin) VALUES (?, ?, ?, 0, 1)",
-  ).run(TEST_ADMIN_USER_ID, email, passwordHash);
+  await prisma.user.create({
+    data: {
+      id: TEST_ADMIN_USER_ID,
+      email,
+      passwordHash,
+      totpEnabled: false,
+      isAdmin: true,
+    },
+  });
 }
 
-export function openDb() {
-  const dir = path.dirname(dbPath);
-  fs.mkdirSync(dir, { recursive: true });
-  const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS recipes (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      duration_minutes INTEGER NOT NULL,
-      servings INTEGER NOT NULL,
-      calories REAL NOT NULL,
-      protein_g REAL NOT NULL,
-      carbs_g REAL NOT NULL,
-      fat_g REAL NOT NULL,
-      ingredients_json TEXT NOT NULL,
-      steps_json TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-    CREATE TABLE IF NOT EXISTS planned_meals (
-      id TEXT PRIMARY KEY,
-      recipe_id TEXT NOT NULL,
-      servings_multiplier REAL NOT NULL DEFAULT 1,
-      FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
-    );
-    CREATE TABLE IF NOT EXISTS weight_entries (
-      id TEXT PRIMARY KEY,
-      measured_at TEXT NOT NULL,
-      weight REAL NOT NULL,
-      unit TEXT NOT NULL,
-      note TEXT
-    );
-    CREATE TABLE IF NOT EXISTS daily_progress (
-      day TEXT PRIMARY KEY,
-      calories REAL NOT NULL,
-      protein_g REAL NOT NULL,
-      carbs_g REAL NOT NULL,
-      fat_g REAL NOT NULL,
-      weight_kg REAL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-  `);
-  migrateAuthAndUserScope(db);
-  migrateDailyProgressCompositePk(db);
-  seedTestAdmin(db);
-  return db;
+async function ensureLegacyUser() {
+  await prisma.user.upsert({
+    where: { id: LEGACY_USER_ID },
+    create: {
+      id: LEGACY_USER_ID,
+      email: "legacy@local",
+      passwordHash: null,
+      totpEnabled: false,
+      isAdmin: false,
+    },
+    update: {},
+  });
 }
 
-/** Rebuild daily_progress so each user has their own row per calendar day. */
-function migrateDailyProgressCompositePk(db: Database.Database) {
-  const exists = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='daily_progress'")
-    .get();
-  if (!exists) return;
-
-  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='daily_progress'").get() as
-    | { sql: string }
-    | undefined;
-  const sql = row?.sql?.toLowerCase() ?? "";
-  if (sql.includes("primary key (user_id, day)") || sql.includes("primary key(user_id,day)")) {
-    return;
-  }
-
-  db.exec(`
-    CREATE TABLE daily_progress_next (
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      day TEXT NOT NULL,
-      calories REAL NOT NULL,
-      protein_g REAL NOT NULL,
-      carbs_g REAL NOT NULL,
-      fat_g REAL NOT NULL,
-      weight_kg REAL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-      PRIMARY KEY (user_id, day)
-    );
-  `);
-  db.exec(`
-    INSERT OR REPLACE INTO daily_progress_next (user_id, day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at)
-    SELECT user_id, day, calories, protein_g, carbs_g, fat_g, weight_kg, updated_at
-    FROM daily_progress;
-  `);
-  db.exec("DROP TABLE daily_progress;");
-  db.exec("ALTER TABLE daily_progress_next RENAME TO daily_progress;");
+export async function connectDb() {
+  await prisma.$connect();
+  await ensureLegacyUser();
+  await seedTestAdmin();
 }
 
 export function rowToRecipe(row: {
   id: string;
   name: string;
-  duration_minutes: number;
+  durationMinutes: number;
   servings: number;
   calories: number;
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
-  ingredients_json: string;
-  steps_json: string;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  ingredientsJson: string;
+  stepsJson: string;
 }): Recipe {
   return {
     id: row.id,
     name: row.name,
-    durationMinutes: row.duration_minutes,
+    durationMinutes: row.durationMinutes,
     servings: row.servings,
     calories: row.calories,
-    proteinG: row.protein_g,
-    carbsG: row.carbs_g,
-    fatG: row.fat_g,
-    ingredients: JSON.parse(row.ingredients_json) as Ingredient[],
-    steps: JSON.parse(row.steps_json) as string[],
+    proteinG: row.proteinG,
+    carbsG: row.carbsG,
+    fatG: row.fatG,
+    ingredients: JSON.parse(row.ingredientsJson) as Ingredient[],
+    steps: JSON.parse(row.stepsJson) as string[],
   };
 }
 
 export function rowToWeightEntry(row: {
   id: string;
-  measured_at: string;
+  measuredAt: Date;
   weight: number;
   unit: string;
   note: string | null;
 }): WeightEntry {
   return {
     id: row.id,
-    measuredAt: row.measured_at,
+    measuredAt: row.measuredAt.toISOString(),
     weight: row.weight,
     unit: row.unit as WeightEntry["unit"],
     ...(row.note != null && row.note !== "" ? { note: row.note } : {}),
@@ -387,24 +264,24 @@ export function rowToWeightEntry(row: {
 export function rowToProgressDay(row: {
   day: string;
   calories: number;
-  protein_g: number;
-  carbs_g: number;
-  fat_g: number;
-  weight_kg: number | null;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  weightKg: number | null;
 }): ProgressDay {
   return {
     day: row.day,
     calories: row.calories,
-    proteinG: row.protein_g,
-    carbsG: row.carbs_g,
-    fatG: row.fat_g,
-    weightKg: row.weight_kg == null ? null : row.weight_kg,
+    proteinG: row.proteinG,
+    carbsG: row.carbsG,
+    fatG: row.fatG,
+    weightKg: row.weightKg == null ? null : row.weightKg,
   };
 }
 
 /** When the DB has no recipes at all, seed the legacy user (first-run / migration). */
-export function seedIfEmpty(db: Database.Database) {
-  const count = db.prepare("SELECT COUNT(*) as c FROM recipes").get() as { c: number };
-  if (count.c > 0) return;
-  insertRecipesForUser(db, LEGACY_USER_ID, SAMPLE_RECIPES);
+export async function seedIfEmpty() {
+  const count = await prisma.recipe.count();
+  if (count > 0) return;
+  await insertRecipesForUser(LEGACY_USER_ID, SAMPLE_RECIPES);
 }
