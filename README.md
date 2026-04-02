@@ -1,10 +1,15 @@
 # Macro Tracker
 
-React + React Router frontend, Express + TypeScript API, SQLite persistence, Docker deployment. Styling is plain CSS (no Tailwind).
+React + React Router frontend, Express + TypeScript API, PostgreSQL with [Prisma](https://www.prisma.io/), Docker deployment. Styling is plain CSS (no Tailwind).
 
 ## Local development
 
+Set `DATABASE_URL` to a PostgreSQL connection string (the schema uses the `citext` extension, available on typical Postgres images).
+
 ```bash
+# Example: Postgres on localhost, database "macro"
+export DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/macro"
+cd server && npx prisma migrate deploy && cd ..
 npm install
 npm run dev
 ```
@@ -12,16 +17,22 @@ npm run dev
 - Client: http://localhost:5173 (proxies `/api` to the server)
 - API: http://localhost:3001
 
+Use `npm run db:migrate -w server` from the repo root to apply migrations, or `npm run db:studio -w server` to open Prisma Studio.
+
 ## Production build
 
 ```bash
+export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DBNAME"
 npm run build
+cd server && npx prisma migrate deploy && cd ..
 npm start
 ```
 
 Serves the built SPA from the API on port 3001.
 
 ## Docker
+
+Compose starts PostgreSQL and the app; the container runs `prisma migrate deploy` before the API.
 
 ```bash
 docker compose up --build

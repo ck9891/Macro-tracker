@@ -1,13 +1,28 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: macro
+    volumes:
+      - macro-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d macro"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     ports:
       - "3001:3001"
     environment:
       PORT: "3001"
-      DATABASE_PATH: /data/app.db
-    volumes:
-      - macro-data:/data
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/macro
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
-  macro-data:
+  macro-pg:
